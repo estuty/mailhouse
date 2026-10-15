@@ -1,0 +1,151 @@
+/**
+ * Admin styles.
+ *
+ * Deliberately small: everything sits inside WordPress' own admin styles and
+ * only adds the few pieces core has no class for.
+ */
+
+.mailhouse-cards {
+	display: grid;
+	grid-template-columns: repeat( auto-fit, minmax( 220px, 1fr ) );
+	gap: 16px;
+	margin: 20px 0;
+}
+
+.mailhouse-card,
+.mailhouse-panel {
+	padding: 16px 20px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+}
+
+.mailhouse-card h2,
+.mailhouse-panel h2 {
+	margin-top: 0;
+	font-size: 13px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #50575e;
+}
+
+.mailhouse-figure {
+	margin: 4px 0;
+	font-size: 28px;
+	font-weight: 600;
+	line-height: 1.2;
+}
+
+.mailhouse-columns {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+	margin: 20px 0;
+	align-items: start;
+}
+
+.mailhouse-panel--narrow {
+	max-width: 420px;
+}
+
+@media screen and ( max-width: 960px ) {
+	.mailhouse-columns {
+		grid-template-columns: 1fr;
+	}
+}
+
+.mailhouse-ok {
+	color: #007017;
+	font-weight: 700;
+}
+
+.mailhouse-warn,
+.mailhouse-warn-text {
+	color: #996800;
+	font-weight: 600;
+}
+
+.mailhouse-status {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 11px;
+	line-height: 1.6;
+	background: #f0f0f1;
+	color: #50575e;
+}
+
+.mailhouse-status--subscribed {
+	background: #edfaef;
+	color: #00500c;
+}
+
+.mailhouse-status--pending {
+	background: #fcf9e8;
+	color: #674600;
+}
+
+.mailhouse-status--unsubscribed {
+	background: #f0f0f1;
+	color: #50575e;
+}
+
+.mailhouse-status--bounced {
+	background: #fcf0f1;
+	color: #8a2424;
+}
+
+.mailhouse-test-result {
+	display: block;
+	margin-top: 8px;
+	padding: 8px 12px;
+	border-left: 4px solid #c3c4c7;
+	background: #f6f7f7;
+}
+
+.mailhouse-test-result:empty {
+	display: none;
+}
+
+.mailhouse-test-result.is-ok {
+	border-left-color: #00a32a;
+}
+
+.mailhouse-test-result.is-error {
+	border-left-color: #d63638;
+}
+
+.mailhouse-merge-tags {
+	max-height: 260px;
+	overflow-y: auto;
+	margin: 0;
+	padding-right: 6px;
+}
+
+.mailhouse-merge-tags li {
+	margin-bottom: 8px;
+}
+
+.mailhouse-detail th {
+	width: 160px;
+	text-align: left;
+}
+
+.mailhouse-detail pre {
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.mailhouse-preview {
+	width: 100%;
+	height: 600px;
+	border: 1px solid #dcdcde;
+	background: #fff;
+}
+
+.mailhouse-mailer-panel {
+	margin-top: 8px;
+	padding-left: 12px;
+	border-left: 3px solid #dcdcde;
+}
