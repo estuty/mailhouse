@@ -1,7 +1,6 @@
 # Mailhouse
 
-One WordPress plugin for the whole mail path — replaces **Noptin** and **WP Mail
-SMTP** together.
+One WordPress plugin to manage your entire email workflow from start to finish.
 
 Those two plugins solve halves of the same problem. The newsletter plugin
 writes the email; the SMTP plugin gets it off the server. Split across two
