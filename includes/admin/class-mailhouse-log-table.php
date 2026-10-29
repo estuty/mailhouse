@@ -67,20 +67,31 @@ class Mailhouse_Log_Table extends WP_List_Table {
 		$current = isset( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
 
 		$labels = array(
-			''       => __( 'All', 'mailhouse' ),
-			'sent'   => __( 'Delivered', 'mailhouse' ),
-			'failed' => __( 'Failed', 'mailhouse' ),
+			''          => __( 'All', 'mailhouse' ),
+			'sent'      => __( 'Accepted', 'mailhouse' ),
+			'failed'    => __( 'Failed', 'mailhouse' ),
+			'bounced'   => __( 'Bounced', 'mailhouse' ),
+			'complaint' => __( 'Complaints', 'mailhouse' ),
 		);
 
 		$views = array();
 
 		foreach ( $labels as $status => $label ) {
+			$count = Mailhouse_Log::count( array( 'status' => $status ) );
+
+			// The bounce views only appear once there is something in them; a
+			// site with no webhook configured should not be shown two
+			// permanently empty links.
+			if ( in_array( $status, array( 'bounced', 'complaint' ), true ) && ! $count ) {
+				continue;
+			}
+
 			$views[ $status ? $status : 'all' ] = sprintf(
 				'<a href="%s"%s>%s <span class="count">(%s)</span></a>',
 				esc_url( mailhouse_admin_url( 'log', $status ? array( 'status' => $status ) : array() ) ),
 				$current === $status ? ' class="current"' : '',
 				esc_html( $label ),
-				esc_html( number_format_i18n( Mailhouse_Log::count( array( 'status' => $status ) ) ) )
+				esc_html( number_format_i18n( $count ) )
 			);
 		}
 
@@ -181,14 +192,29 @@ class Mailhouse_Log_Table extends WP_List_Table {
 	 * @return string
 	 */
 	public function column_status( $item ) {
+		// "Accepted" rather than "Delivered": at this point the transport took
+		// the message, which is not the same as an inbox having it. A bounce
+		// row arriving later for the same address is exactly that difference.
 		if ( 'sent' === $item->status ) {
-			return '<span class="mailhouse-status mailhouse-status--subscribed">' . esc_html__( 'Delivered', 'mailhouse' ) . '</span>';
+			return '<span class="mailhouse-status mailhouse-status--subscribed">' . esc_html__( 'Accepted', 'mailhouse' ) . '</span>';
 		}
 
+		$labels = array(
+			'failed'       => array( 'bounced', __( 'Failed', 'mailhouse' ) ),
+			'bounced'      => array( 'bounced', __( 'Bounced', 'mailhouse' ) ),
+			'complaint'    => array( 'bounced', __( 'Spam complaint', 'mailhouse' ) ),
+			'unsubscribed' => array( 'unsubscribed', __( 'Unsubscribed', 'mailhouse' ) ),
+		);
+
+		$label = isset( $labels[ $item->status ] ) ? $labels[ $item->status ] : array( 'pending', $item->status );
+
 		return sprintf(
-			'<span class="mailhouse-status mailhouse-status--bounced">%s</span><br /><span class="description">%s</span>',
-			esc_html__( 'Failed', 'mailhouse' ),
-			esc_html( wp_trim_words( (string) $item->error, 12 ) )
+			'<span class="mailhouse-status mailhouse-status--%s">%s</span>%s',
+			esc_attr( $label[0] ),
+			esc_html( $label[1] ),
+			'' !== (string) $item->error
+				? '<br /><span class="description">' . esc_html( wp_trim_words( (string) $item->error, 12 ) ) . '</span>'
+				: ''
 		);
 	}
 

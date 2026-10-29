@@ -21,6 +21,25 @@ class Mailhouse_Admin_Settings {
 	 */
 	public function __construct() {
 		add_action( 'admin_post_mailhouse_save_settings', array( $this, 'save' ) );
+		add_action( 'admin_post_mailhouse_rotate_webhook_key', array( $this, 'rotate_webhook_key' ) );
+	}
+
+	/**
+	 * Replace the webhook secret.
+	 *
+	 * @return void
+	 */
+	public function rotate_webhook_key() {
+		check_admin_referer( 'mailhouse_rotate_webhook_key' );
+
+		if ( ! mailhouse_can_manage() ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'mailhouse' ), '', array( 'response' => 403 ) );
+		}
+
+		Mailhouse_Webhooks::rotate_key();
+
+		wp_safe_redirect( mailhouse_admin_url( 'settings', array( 'tab' => 'log', 'updated' => 1 ) ) );
+		exit;
 		add_action( 'admin_post_mailhouse_preview_template', array( $this, 'preview' ) );
 	}
 
@@ -392,6 +411,36 @@ class Mailhouse_Admin_Settings {
 							),
 						),
 					),
+					array(
+						'title'       => __( 'Bounces and complaints', 'mailhouse' ),
+						'description' => __( 'A bounce arrives at your provider hours after the send, so they have to tell you about it. Give them this address and Mailhouse retires dead addresses by itself, which is the single most useful thing you can do for your sending reputation.', 'mailhouse' ),
+						'fields'      => array(
+							'webhook'               => array(
+								'label' => __( 'Endpoint', 'mailhouse' ),
+								'type'  => 'webhook',
+							),
+							'soft_bounce_limit'     => array(
+								'label'       => __( 'Soft bounces before an address is retired', 'mailhouse' ),
+								'type'        => 'number',
+								'description' => __( 'A full mailbox is temporary, so these are counted rather than acted on. The count is cleared whenever the provider confirms a delivery. Zero never retires an address on soft bounces alone.', 'mailhouse' ),
+							),
+							'webhook_mailgun_key'   => array(
+								'label'       => __( 'Mailgun webhook signing key', 'mailhouse' ),
+								'type'        => 'password',
+								'description' => __( 'From Mailgun, under Sending -> Webhooks. With it set, unsigned callbacks are refused.', 'mailhouse' ),
+							),
+							'webhook_resend_secret' => array(
+								'label'       => __( 'Resend signing secret', 'mailhouse' ),
+								'type'        => 'password',
+								'description' => __( 'The whsec_... value shown when you add the webhook in Resend.', 'mailhouse' ),
+							),
+							'webhook_sendgrid_key'  => array(
+								'label'       => __( 'SendGrid verification key', 'mailhouse' ),
+								'type'        => 'text',
+								'description' => __( 'The public key SendGrid shows after you turn on signed event webhooks. Not a secret, so it is stored as it is.', 'mailhouse' ),
+							),
+						),
+					),
 				),
 			),
 			'advanced'   => array(
@@ -520,6 +569,8 @@ class Mailhouse_Admin_Settings {
 			$this->mailer_field();
 		} elseif ( 'preview' === $field['type'] ) {
 			$this->preview_field();
+		} elseif ( 'webhook' === $field['type'] ) {
+			$this->webhook_field();
 		} else {
 			$this->field( $key, $field );
 		}
@@ -804,6 +855,76 @@ class Mailhouse_Admin_Settings {
 	}
 
 	/**
+	 * Print the webhook endpoints and the key controls.
+	 *
+	 * Site mail and campaigns can go out through different transports, so both
+	 * are offered: a bounce reported to one provider says nothing about the
+	 * other, and the newsletter stream is the one bounces matter most on.
+	 *
+	 * @return void
+	 */
+	protected function webhook_field() {
+		$streams   = Mailhouse_Webhooks::active_providers();
+		$providers = Mailhouse_Webhooks::providers();
+
+		if ( $streams ) {
+			foreach ( $streams as $id => $label ) {
+				printf(
+					'<p><label for="mailhouse-webhook-%s"><strong>%s</strong></label></p>',
+					esc_attr( $id ),
+					esc_html(
+						sprintf(
+							/* translators: %s: provider name. */
+							__( 'Paste this into %s', 'mailhouse' ),
+							$label
+						)
+					)
+				);
+
+				printf(
+					'<input type="text" id="mailhouse-webhook-%s" class="large-text code" readonly onclick="this.select()" value="%s" />',
+					esc_attr( $id ),
+					esc_attr( Mailhouse_Webhooks::url( $id ) )
+				);
+			}
+		} else {
+			printf(
+				'<p class="description">%s</p>',
+				esc_html__( 'Neither transport in use can report bounces -- SMTP and PHP mail have no callbacks. Switch to a mail API to get them, or watch for failures in the log instead.', 'mailhouse' )
+			);
+		}
+
+		echo '<details style="margin-top:12px"><summary>' . esc_html__( 'Endpoints for every provider', 'mailhouse' ) . '</summary><table class="widefat striped" style="margin-top:8px">';
+
+		foreach ( $providers as $id => $label ) {
+			printf(
+				'<tr><td style="width:22%%"><strong>%s</strong></td><td><input type="text" class="large-text code" readonly onclick="this.select()" value="%s" /></td></tr>',
+				esc_html( $label ),
+				esc_attr( Mailhouse_Webhooks::url( $id ) )
+			);
+		}
+
+		echo '</table></details>';
+
+		printf(
+			'<p style="margin-top:12px"><a href="%s" class="button" onclick="return confirm(%s)">%s</a></p>',
+			esc_url(
+				wp_nonce_url(
+					add_query_arg( 'action', 'mailhouse_rotate_webhook_key', admin_url( 'admin-post.php' ) ),
+					'mailhouse_rotate_webhook_key'
+				)
+			),
+			esc_attr( wp_json_encode( __( 'Replace the key? Every endpoint already saved in a provider dashboard stops working until you paste the new one in.', 'mailhouse' ) ) ),
+			esc_html__( 'Replace the key', 'mailhouse' )
+		);
+
+		printf(
+			'<p class="description">%s</p>',
+			esc_html__( 'The key in the URL is what proves a callback is genuine. Where the provider can also sign the body -- Mailgun, Resend, SendGrid -- set the signing key below as well: without one, anyone who learns this URL can mark your subscribers as bounced.', 'mailhouse' )
+		);
+	}
+
+	/**
 	 * Save the submitted tab.
 	 *
 	 * @return void
@@ -870,6 +991,11 @@ class Mailhouse_Admin_Settings {
 
 		foreach ( $tabs[ $tab ]['sections'] as $section ) {
 			foreach ( $section['fields'] as $key => $field ) {
+				// Display-only: the endpoint panel has nothing to store.
+				if ( 'webhook' === $field['type'] ) {
+					continue;
+				}
+
 				if ( 'mailer' === $field['type'] ) {
 					$fields['mailer'] = array( 'type' => 'provider' );
 

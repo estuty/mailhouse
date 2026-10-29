@@ -276,9 +276,10 @@ class Mailhouse_Admin {
 					<p class="description">
 						<?php
 						printf(
-							/* translators: %s: number of failures. */
-							esc_html__( '%s failed', 'mailhouse' ),
-							esc_html( number_format_i18n( $log['failed'] ) )
+							/* translators: 1: number of failures, 2: number of bounces. */
+							esc_html__( '%1$s failed, %2$s bounced', 'mailhouse' ),
+							esc_html( number_format_i18n( $log['failed'] ) ),
+							esc_html( number_format_i18n( $log['bounced'] + $log['complaint'] ) )
 						);
 						?>
 					</p>

@@ -41,6 +41,11 @@ mailhouse/
 - **Email log.** Every message, its result, and the transport's own error text
   when it fails. Searchable, with retention, and resend for anything whose body
   was kept.
+- **Bounce and complaint callbacks.** SendGrid, Mailgun, Brevo, Postmark and
+  Resend report back; a hard bounce retires the address by itself, a spam
+  complaint unsubscribes, soft bounces are counted and forgiven on the next
+  confirmed delivery. Authenticated by a URL secret plus a body signature where
+  the provider offers one.
 - **Failure alerts.** One email an hour, at most, when delivery is failing.
 - **Encrypted credentials**, or define them as constants in `wp-config.php` and
   keep them out of the database entirely.

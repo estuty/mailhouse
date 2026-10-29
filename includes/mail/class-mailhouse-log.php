@@ -420,8 +420,10 @@ class Mailhouse_Log {
 		);
 
 		$stats = array(
-			'sent'   => 0,
-			'failed' => 0,
+			'sent'      => 0,
+			'failed'    => 0,
+			'bounced'   => 0,
+			'complaint' => 0,
 		);
 
 		foreach ( (array) $rows as $row ) {

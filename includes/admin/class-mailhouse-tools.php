@@ -175,6 +175,7 @@ class Mailhouse_Tools {
 			__( 'Transport', 'mailhouse' )           => $provider ? $provider->label() : __( 'unknown', 'mailhouse' ),
 			__( 'Transport configured', 'mailhouse' ) => Mailhouse_Mailer::is_ready() ? __( 'yes', 'mailhouse' ) : __( 'no', 'mailhouse' ),
 			__( 'Credential encryption', 'mailhouse' ) => Mailhouse_Crypto::is_available() ? __( 'available', 'mailhouse' ) : __( 'not available', 'mailhouse' ),
+			__( 'Bounce callbacks', 'mailhouse' )    => $this->webhook_status(),
 			__( 'WP-Cron', 'mailhouse' )             => ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) ? __( 'disabled in wp-config.php', 'mailhouse' ) : __( 'enabled', 'mailhouse' ),
 			__( 'Next queue run', 'mailhouse' )      => $next ? mailhouse_date( gmdate( 'Y-m-d H:i:s', $next ) ) : __( 'not scheduled', 'mailhouse' ),
 			__( 'Waiting in the queue', 'mailhouse' ) => number_format_i18n( Mailhouse_Queue::pending_count() ),
@@ -213,6 +214,43 @@ class Mailhouse_Tools {
 			<textarea class="large-text code" rows="6" readonly onclick="this.select()"><?php echo esc_textarea( $report ); ?></textarea>
 		</div>
 		<?php
+	}
+
+	/**
+	 * One line about the bounce endpoints, for the status report.
+	 *
+	 * @return string
+	 */
+	protected function webhook_status() {
+		$streams = Mailhouse_Webhooks::active_providers();
+
+		if ( ! $streams ) {
+			return __( 'not available on these transports', 'mailhouse' );
+		}
+
+		$signing = array(
+			'mailgun'  => 'webhook_mailgun_key',
+			'resend'   => 'webhook_resend_secret',
+			'sendgrid' => 'webhook_sendgrid_key',
+		);
+
+		$parts = array();
+
+		foreach ( $streams as $id => $label ) {
+			if ( ! isset( $signing[ $id ] ) ) {
+				/* translators: %s: provider name. */
+				$parts[] = sprintf( __( '%s ready (cannot sign callbacks)', 'mailhouse' ), $label );
+				continue;
+			}
+
+			$parts[] = '' !== (string) mailhouse_option( $signing[ $id ], '' )
+				/* translators: %s: provider name. */
+				? sprintf( __( '%s ready, signature checking on', 'mailhouse' ), $label )
+				/* translators: %s: provider name. */
+				: sprintf( __( '%s ready, no signing key set', 'mailhouse' ), $label );
+		}
+
+		return implode( '; ', $parts );
 	}
 
 	/**

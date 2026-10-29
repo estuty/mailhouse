@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -27,6 +27,7 @@ SMTP plugin, and the seam between them is where sites quietly break.
 * Resend a failed message, or get an email when delivery starts failing.
 * Credentials encrypted at rest, or defined as constants in wp-config.php.
 * A test send that reports exactly what came back.
+* Bounce and complaint callbacks, so dead addresses retire themselves.
 
 **Newsletter**
 
@@ -87,6 +88,24 @@ Advanced before uninstalling.
 4. Writing a broadcast, with recipients and merge tags alongside.
 
 == Changelog ==
+
+= 1.2.0 =
+* Bounce and complaint handling. SendGrid, Mailgun, Brevo, Postmark and Resend
+  can now report back, and a hard bounce retires the address by itself. Find
+  the endpoint under Settings -> Log & alerts.
+* Soft bounces are counted rather than acted on, and the count clears when the
+  provider confirms a delivery. The threshold is configurable; zero never
+  retires an address on soft bounces alone.
+* A spam complaint always unsubscribes, from any status.
+* Callbacks are authenticated by a secret in the URL, and by a signature over
+  the body where the provider offers one: HMAC for Mailgun and Resend, ECDSA
+  for SendGrid. Signed callbacks are also checked for replay.
+* Where campaigns use their own transport, both endpoints are offered -- a
+  bounce reported to one provider says nothing about the other.
+* Bounces, complaints and provider-side unsubscribes appear in the email log
+  with the provider's own wording.
+* The log now says "Accepted" rather than "Delivered" where it means the
+  transport took the message, which is not the same thing.
 
 = 1.1.0 =
 * New: Email design tab. Logo from the Media Library, header, brand, button and background colours, social links, dark-mode support, a preview and a test send. Can be applied to all email the site sends.
