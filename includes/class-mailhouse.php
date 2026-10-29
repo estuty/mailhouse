@@ -46,6 +46,7 @@ class Mailhouse {
 		$this->modules = array(
 			'mailer'      => new Mailhouse_Mailer(),
 			'log'         => new Mailhouse_Log(),
+			'webhooks'    => new Mailhouse_Webhooks(),
 			'subscribers' => new Mailhouse_Subscribers(),
 			'forms'       => new Mailhouse_Forms(),
 			'optin'       => new Mailhouse_Optin(),

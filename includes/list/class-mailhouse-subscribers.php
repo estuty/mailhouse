@@ -415,9 +415,11 @@ class Mailhouse_Subscribers {
 	 * unsubscribe is supposed to prevent.
 	 *
 	 * @param object $subscriber Subscriber row.
+	 * @param string $source     How they left: a link, a provider callback, a
+	 *                           spam complaint, or the admin.
 	 * @return bool
 	 */
-	public static function unsubscribe( $subscriber ) {
+	public static function unsubscribe( $subscriber, $source = '' ) {
 		if ( ! $subscriber || 'unsubscribed' === $subscriber->status ) {
 			return false;
 		}
@@ -436,8 +438,44 @@ class Mailhouse_Subscribers {
 		 * Fires when somebody leaves the list.
 		 *
 		 * @param object $subscriber Subscriber row.
+		 * @param string $source     What removed them.
 		 */
-		do_action( 'mailhouse_subscriber_unsubscribed', self::get( (int) $subscriber->id ) );
+		do_action( 'mailhouse_subscriber_unsubscribed', self::get( (int) $subscriber->id ), $source );
+
+		return true;
+	}
+
+	/**
+	 * Stop sending to an address the provider says does not work.
+	 *
+	 * A separate status from unsubscribed, because the two mean different
+	 * things: one is a decision the person made, the other is a fact about
+	 * their mailbox. Keeping them apart is what lets you see at a glance
+	 * whether a list is shrinking because people are leaving or because it has
+	 * gone stale.
+	 *
+	 * The counter is left to the caller, which knows whether this bounce has
+	 * already been counted.
+	 *
+	 * @param object $subscriber Subscriber row.
+	 * @param string $reason     What the provider said.
+	 * @return bool Whether this call is what changed the status.
+	 */
+	public static function mark_bounced( $subscriber, $reason = '' ) {
+		if ( ! $subscriber || 'bounced' === $subscriber->status ) {
+			return false;
+		}
+
+		self::update( (int) $subscriber->id, array( 'status' => 'bounced' ) );
+		self::cancel_queued( (int) $subscriber->id );
+
+		/**
+		 * Fires when an address is retired as undeliverable.
+		 *
+		 * @param object $subscriber Subscriber row.
+		 * @param string $reason     What the provider said.
+		 */
+		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason );
 
 		return true;
 	}

@@ -3,7 +3,7 @@
  * Plugin Name:       Mailhouse
  * Plugin URI:        https://example.com/mailhouse/
  * Description:       One plugin for the whole mail path: reliable delivery over SMTP or a mail API with a searchable log, plus a self-hosted newsletter -- opt-in forms, double opt-in, tags, broadcasts and automations. Replaces a separate SMTP plugin and a separate newsletter plugin.
- * Version:           1.1.0
+ * Version:           1.2.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Mailhouse
@@ -17,7 +17,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MAILHOUSE_VERSION', '1.1.0' );
+define( 'MAILHOUSE_VERSION', '1.2.0' );
 define( 'MAILHOUSE_FILE', __FILE__ );
 define( 'MAILHOUSE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'MAILHOUSE_URL', plugin_dir_url( __FILE__ ) );

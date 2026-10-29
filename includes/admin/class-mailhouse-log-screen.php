@@ -162,9 +162,28 @@ class Mailhouse_Log_Screen {
 			<table class="widefat striped mailhouse-detail">
 				<tbody>
 					<tr><th><?php esc_html_e( 'When', 'mailhouse' ); ?></th><td><?php echo esc_html( mailhouse_date( $entry->created_at ) ); ?></td></tr>
-					<tr><th><?php esc_html_e( 'Result', 'mailhouse' ); ?></th><td><?php echo esc_html( 'sent' === $entry->status ? __( 'Delivered to the transport', 'mailhouse' ) : __( 'Failed', 'mailhouse' ) ); ?></td></tr>
+					<?php
+					$results = array(
+						'sent'         => __( 'Accepted by the transport', 'mailhouse' ),
+						'failed'       => __( 'Failed before it left the site', 'mailhouse' ),
+						'bounced'      => __( 'Bounced -- reported back by the provider', 'mailhouse' ),
+						'complaint'    => __( 'Marked as spam by the recipient', 'mailhouse' ),
+						'unsubscribed' => __( 'Unsubscribed at the provider', 'mailhouse' ),
+					);
+					?>
+					<tr><th><?php esc_html_e( 'Result', 'mailhouse' ); ?></th><td><?php echo esc_html( isset( $results[ $entry->status ] ) ? $results[ $entry->status ] : $entry->status ); ?></td></tr>
 					<?php if ( '' !== (string) $entry->error ) : ?>
-						<tr><th><?php esc_html_e( 'Error', 'mailhouse' ); ?></th><td><code><?php echo esc_html( $entry->error ); ?></code></td></tr>
+						<tr>
+							<th>
+								<?php
+								// A failure has an error; a bounce has the
+								// provider's own wording, which is not the
+								// same thing.
+								echo esc_html( 'failed' === $entry->status ? __( 'Error', 'mailhouse' ) : __( 'Reason given', 'mailhouse' ) );
+								?>
+							</th>
+							<td><code><?php echo esc_html( $entry->error ); ?></code></td>
+						</tr>
 					<?php endif; ?>
 					<tr><th><?php esc_html_e( 'From', 'mailhouse' ); ?></th><td><?php echo esc_html( $entry->from_email ); ?></td></tr>
 					<tr><th><?php esc_html_e( 'To', 'mailhouse' ); ?></th><td><?php echo esc_html( $entry->to_email ); ?></td></tr>

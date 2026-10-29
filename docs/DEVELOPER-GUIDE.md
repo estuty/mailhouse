@@ -64,6 +64,7 @@ includes/
 │   ├── class-mailhouse-phpmailer.php  The subclass
 │   ├── class-mailhouse-provider.php   Transport base class
 │   ├── class-mailhouse-log.php        The log
+│   ├── class-mailhouse-webhooks.php   Bounce and complaint callbacks
 │   └── providers/                     One file per transport
 ├── list/
 │   ├── class-mailhouse-subscribers.php  CRUD, statuses, privacy tooling
@@ -105,7 +106,9 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_loaded` | Every module is up | `Mailhouse $plugin` |
 | `mailhouse_subscriber_added` | A row is created, confirmed or not | `object $subscriber` |
 | `mailhouse_subscriber_confirmed` | Somebody joins for real | `object $subscriber` |
-| `mailhouse_subscriber_unsubscribed` | Somebody leaves | `object $subscriber` |
+| `mailhouse_subscriber_unsubscribed` | Somebody leaves | `object $subscriber, string $source` |
+| `mailhouse_subscriber_bounced` | An address is retired as undeliverable | `object $subscriber, string $reason` |
+| `mailhouse_webhook_event` | Any provider event, matched or not | `array $event, ?object $subscriber` |
 | `mailhouse_subscribers_deleted` | Rows are deleted | `int[] $ids` |
 | `mailhouse_campaign_queued` | A campaign is queued | `int $campaign_id, int $queued` |
 | `mailhouse_campaign_finished` | Its last message goes out | `int $campaign_id, array $stats` |
@@ -126,6 +129,8 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_campaign_headers` | Headers on bulk mail | `string[] $headers, object $subscriber` |
 | `mailhouse_public_tags` | Tags offered on the preferences page | `object[] $tags` |
 | `mailhouse_confirm_redirect` | Where confirmation sends people | `string $url, object $subscriber` |
+| `mailhouse_webhook_events` | Normalised events parsed from a callback | `array $events, string $provider, array $payload` |
+| `mailhouse_webhook_tolerance` | Clock skew allowed on a signed callback | `int $seconds` |
 
 ## Adding a transport
 
@@ -190,6 +195,53 @@ PHPMailer object, plus `request()` and `fail_response()`. A field named in
 automatically, and picks up `MAILHOUSE_ACME_KEY` from `wp-config.php` if it is
 defined.
 
+## Bounce callbacks
+
+`?mailhouse_webhook=<provider>&k=<secret>` — a query-string endpoint rather
+than a pretty URL, so it needs no rewrite rules and cannot break on a site with
+plain permalinks or one whose rules were never flushed. The secret may also
+travel as an `X-Mailhouse-Key` header, which keeps it out of access logs.
+
+Everything arriving there is untrusted input from the public internet, so two
+things guard it:
+
+1. **The URL secret**, checked with `hash_equals()`. Every provider can carry
+   it.
+2. **A signature over the body**, where the provider offers one — HMAC-SHA256
+   for Mailgun (over its own timestamp and token) and Resend (Svix: `id`,
+   timestamp and body), ECDSA-SHA256 for SendGrid. Signed callbacks are also
+   checked against a 15-minute clock skew, so a captured callback cannot be
+   replayed for ever.
+
+Verification is skipped when no key is configured for that provider, because
+Brevo and Postmark have no signing scheme at all and refusing them would mean
+no bounce handling for those two. Where a key *is* set, an unsigned or badly
+signed callback is refused outright.
+
+Each provider's payload is normalised to a list of
+`array( 'email', 'type', 'reason' )`, where `type` is one of `hard`, `soft`,
+`complaint`, `unsubscribe` or `delivered`. Anything else — opens, clicks,
+deferrals, processed notices — is dropped at the parser, because acting on it
+either duplicates our own tracking or punishes an address for a condition the
+provider is still retrying.
+
+`Mailhouse_Webhooks::process( $provider, $body )` does the verifying, parsing
+and applying and returns counts or a `WP_Error`; `handle()` is only the request
+plumbing around it. That split is what makes the parsers testable without a
+network, and it is how one of the transports without a parser yet — SES,
+Mailjet, SparkPost, SMTP2GO, Elastic Email, MailerSend, ZeptoMail, Mailchimp
+Transactional — can be bolted on: point its callback at any provider id and
+rewrite the events with `mailhouse_webhook_events`.
+
+Repeats are no-ops. Providers retry callbacks they could not deliver, and some
+send the same event twice regardless, so each branch stops when the subscriber
+is already in the state the event describes — otherwise a fortnight of retries
+inflates the bounce counter and fills the log with copies of one bounce.
+
+`active_providers()` reports the transports actually in use, across both the
+site and campaign streams, which is what the settings screen and the status
+report are built from.
+
 ## Templates
 
 Both are overridable from the active theme:
@@ -245,9 +297,11 @@ rewrite rule actually matching, and PHPMailer actually assembling a message,
 all of which a mock would get wrong.
 
 ```bash
-php tests/test-core.php     # activation, settings, list, queue, transports
-php tests/test-admin.php    # every admin screen, and the form endpoint
-php tests/test-import.php   # CSV, Noptin and WP Mail SMTP importers
+php tests/test-core.php      # activation, settings, list, queue, transports
+php tests/test-admin.php     # every admin screen, and the form endpoint
+php tests/test-import.php    # CSV, Noptin and WP Mail SMTP importers
+php tests/test-features.php  # transports, design, digests
+php tests/test-webhooks.php  # bounce parsing and signature verification
 ```
 
 `tests/bootstrap.php` walks up from the plugin folder looking for
@@ -264,9 +318,12 @@ that only shows up on a screen nobody opened during development.
 
 ## Things deliberately not done
 
-- **No bounce handling.** Doing it properly needs provider webhooks or IMAP
-  polling. The `bounced` status exists in the schema for it, and nothing sets it
-  yet. Marking somebody bounced by hand works.
+- **No IMAP bounce polling.** Bounces come from provider callbacks, which means
+  an SMTP-only site gets none. Reading a bounce mailbox over IMAP would cover
+  that case, and parsing arbitrary DSNs reliably is a project of its own.
+- **No callback parsers for every transport yet.** Five of them report bounces:
+  SendGrid, Mailgun, Brevo, Postmark and Resend. The rest send a different
+  shape, and each needs its own parser.
 - **No A/B testing, no automation trees.** Three automations cover what most
   sites need; the rest is a different product.
 - **No block editor for emails.** Block markup carries layout CSS that mail

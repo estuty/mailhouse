@@ -46,6 +46,8 @@ class Mailhouse_Settings {
 		'mailersend_key',
 		'zeptomail_token',
 		'mandrill_key',
+		'webhook_mailgun_key',
+		'webhook_resend_secret',
 	);
 
 	/**
@@ -111,6 +113,12 @@ class Mailhouse_Settings {
 			'log_retention_days'  => 30,
 			'alerts_enabled'      => false,
 			'alerts_email'        => '',
+
+			// Bounce and complaint callbacks.
+			'webhook_mailgun_key'   => '',
+			'webhook_resend_secret' => '',
+			'webhook_sendgrid_key'  => '',
+			'soft_bounce_limit'     => 3,
 
 			// List and opt-in.
 			'double_optin'        => true,

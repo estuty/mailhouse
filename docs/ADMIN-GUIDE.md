@@ -129,6 +129,68 @@ after.
 
 ---
 
+### Bounces and complaints
+
+A bounce does not happen while you are sending. It arrives at your provider
+minutes or days later, and they are the only one who knows. So they have to
+tell you — and then Mailhouse can retire dead addresses without anybody
+reading a mailbox.
+
+Sending to addresses that no longer exist is the fastest way to ruin a
+domain's reputation, so this is worth ten minutes of setup.
+
+**Settings → Log & alerts → Bounces and complaints.** Copy the endpoint shown
+for your transport and paste it into the provider:
+
+| Provider | Where | Events to send |
+|---|---|---|
+| SendGrid | Settings → Mail Settings → Event Webhook | Bounced, Dropped, Spam Reports, Unsubscribed, Delivered |
+| Mailgun | Sending → Webhooks | Permanent Failure, Temporary Failure, Complained, Unsubscribed, Delivered |
+| Brevo | Transactional → Settings → Webhooks | Hard bounce, Soft bounce, Blocked, Marked as spam, Unsubscribed, Delivered |
+| Postmark | Servers → your server → Webhooks | Bounce, Spam Complaint, Subscription Change, Delivery |
+| Resend | Webhooks → Add | `email.bounced`, `email.complained`, `email.delivered` |
+
+Send the delivered event too if the provider offers it. It is what clears a
+soft-bounce count, so a mailbox that was briefly full does not creep towards
+being retired.
+
+If campaigns go out through their own transport, you will see **two**
+endpoints. Set both up: a bounce reported to one provider says nothing about
+the other, and the newsletter stream is the one bounces matter most on.
+
+The other transports — SES, Mailjet, SparkPost, SMTP2GO, Elastic Email,
+MailerSend, ZeptoMail, Mailchimp Transactional — can report bounces too, but
+Mailhouse does not parse their callback formats yet. SMTP and PHP mail have no
+callbacks at all; that is one of the better arguments for using a mail API.
+
+**Then set the signing key.** Mailgun, Resend and SendGrid can sign what they
+send, and the fields are right below the endpoint. Without a signature, the
+only thing protecting the endpoint is the secret in the URL — and anyone who
+learns that URL could mark your subscribers as bounced, which is a quiet way of
+cutting people off your list. Set the key where one exists.
+
+If a URL ever leaks, **Replace the key**. Every endpoint already saved in a
+provider dashboard stops working until you paste the new one in, so do it in
+that order.
+
+### What each event does
+
+| What happened | What Mailhouse does |
+|---|---|
+| Hard bounce — the address does not exist | Status becomes **Bounced**. Anything queued for them is dropped. |
+| Soft bounce — mailbox full, server busy | Counted, nothing else. At three (configurable) the address is retired. A confirmed delivery resets the count to zero. |
+| Spam complaint | **Unsubscribed** immediately, whatever their status was. Non-negotiable: continuing after a complaint is what gets a domain blocked outright. |
+| Unsubscribed at the provider | **Unsubscribed** here too. |
+| Opens, clicks, deferrals | Ignored. Deferrals are temporary and the provider is still retrying; opens and clicks are tracked here already, if you turned that on. |
+
+All of it appears in the email log with the provider's own wording, so "why did
+this person stop receiving the newsletter" has an answer you can read. Bounced
+and Spam complaint views appear in the log as soon as there is something in
+them.
+
+A bounce for somebody who was never a subscriber — a receipt, a password reset
+— is logged too, but there is no list membership to change.
+
 ## 3. Collect subscribers
 
 ### A form
@@ -271,5 +333,7 @@ sending domain gets blocked, and it is not undoable.
 | A campaign is stuck at "Sending" | Tools → Status: is cron running? |
 | The confirmation email never comes | Email log. It will be there, sent or failed. |
 | Two plugins fighting over delivery | The admin warns you by name. Deactivate one. |
+| Somebody stopped receiving the newsletter | Subscribers: are they Bounced? The log says why. |
+| Bounces are not being recorded | Open the endpoint URL in a browser. It should answer `{"ok":true}`; anything else means the key is wrong. |
 
 **Tools → Status** has a summary worth copying into any support request.
