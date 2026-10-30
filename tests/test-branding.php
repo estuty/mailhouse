@@ -265,6 +265,92 @@ check( 'an unknown key prints nothing at all', '' === trim( $injected ), $inject
 
 unset( $_GET[ Mailhouse_Notice::QUERY ] );
 
+echo "== The standalone pages use the design too ==\n";
+
+Mailhouse_Settings::set(
+	array(
+		'template_accent'  => '#3d82f6',
+		'template_card_bg' => '#161c33',
+		'template_ink'     => '#f3f6fc',
+	)
+);
+
+$brand = mailhouse_brand_palette();
+
+check( 'the palette reads the message background', '#161c33' === $brand['surface'], $brand['surface'] );
+check( 'the palette reads the text colour', '#f3f6fc' === $brand['ink'], $brand['ink'] );
+check( 'a dark design is recognised as dark', true === $brand['is_dark'] );
+
+foreach ( array( 'accent', 'surface', 'ink', 'on_accent', 'muted', 'edge', 'field' ) as $slot ) {
+	check( "the $slot colour is a usable hex", (string) sanitize_hex_color( $brand[ $slot ] ) === $brand[ $slot ], $brand[ $slot ] );
+}
+
+$page = Mailhouse_Optin::page_html( 'Your preferences', '<p class="mailhouse-notice">Saved.</p>' );
+
+check( 'the page takes the message background', false !== strpos( $page, '--mh-surface: #161c33' ) );
+check( 'the page takes the text colour', false !== strpos( $page, '--mh-ink: #f3f6fc' ) );
+check( 'the page takes the brand colour', false !== strpos( $page, '--mh-accent: #3d82f6' ) );
+
+// The whole point of the change: this page used to be white whatever the
+// design said.
+check( 'the page is no longer hardcoded white', false === strpos( $page, 'background: #fff;' ) );
+check( 'nor hardcoded near-black text', false === strpos( $page, 'color: #1a1a1a' ) );
+
+// Same rule the emails follow: a design the site chose is not up for
+// renegotiation by the reader's browser.
+check( 'no dark-mode override on an already-dark design', false === strpos( $page, 'prefers-color-scheme: dark' ) );
+check( 'and the browser is told the page is dark', false !== strpos( $page, 'color-scheme: dark;' ) );
+
+check( 'the title still lands in the page', false !== strpos( $page, 'Your preferences' ) );
+check( 'the body still lands in the page', false !== strpos( $page, 'Saved.' ) );
+
+// The popup and the page are the same surface now, which is the thing that
+// used to drift.
+$popup_brand = mailhouse_brand_palette();
+check(
+	'the popup and the page agree on the surface',
+	false !== strpos( $page, '--mh-surface: ' . $popup_brand['surface'] ),
+	$popup_brand['surface']
+);
+
+Mailhouse_Settings::set( array( 'template_accent' => '#ffe066' ) );
+
+$pale = Mailhouse_Optin::page_html( 'Pale', '' );
+
+check( 'button text goes dark on a pale brand colour', false !== strpos( $pale, '--mh-on-accent: #111827' ), $pale );
+
+Mailhouse_Settings::set(
+	array(
+		'template_accent'  => '#2b6cb0',
+		'template_card_bg' => '#ffffff',
+		'template_ink'     => '#1f2937',
+	)
+);
+
+$light_page = Mailhouse_Optin::page_html( 'Light', '' );
+
+check( 'a light design is not reported as dark', false === mailhouse_brand_palette()['is_dark'] );
+check( 'a light design still follows the reader at night', false !== strpos( $light_page, 'prefers-color-scheme: dark' ) );
+check( 'and asks the browser for either scheme', false !== strpos( $light_page, 'color-scheme: light dark' ) );
+
+$escaped = Mailhouse_Optin::page_html( '<script>alert(1)</script>', '<p>body</p>' );
+
+check( 'the page title is escaped', false === strpos( $escaped, '<script>alert(1)</script>' ) );
+check( 'the body is passed through for the caller to have escaped', false !== strpos( $escaped, '<p>body</p>' ) );
+
+add_filter(
+	'mailhouse_brand_palette',
+	function ( $palette ) {
+		$palette['surface'] = '#ff00ff';
+
+		return $palette;
+	}
+);
+
+check( 'the palette is filterable', false !== strpos( Mailhouse_Optin::page_html( 'F', '' ), '--mh-surface: #ff00ff' ) );
+
+remove_all_filters( 'mailhouse_brand_palette' );
+
 echo "\n== Cleanup ==\n";
 
 Mailhouse_Subscribers::delete( array( $subscriber_id ) );

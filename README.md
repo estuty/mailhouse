@@ -111,15 +111,17 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 56 files | pass |
+| PHP lint, 57 files | pass |
 | `tests/test-core.php` — 78 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
 | `tests/test-features.php` — 80 assertions | pass |
 | `tests/test-webhooks.php` — 50 assertions | pass |
-| `tests/test-branding.php` — 62 assertions | pass |
+| `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
 | A real update installed from a published release | same folder, stays active |
+| The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |
+| Unsubscribe and preferences pages under a dark, a light and a pale design | brand colours throughout, button text readable on all three |
 | Every admin screen and settings tab rendered | no notices or warnings |
 | Activation from cold: tables, defaults, rewrites | correct |
 | Double opt-in: confirm, replay, unsubscribe | 200 / 410 / 200 |

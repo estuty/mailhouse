@@ -94,6 +94,12 @@ A light design also gets a dark-mode variant for readers whose phone is in dark
 mode. A design that is already dark does not — overriding it would swap your
 colours for somebody else's greys.
 
+These colours are not only for the email. The confirmation popup and the
+unsubscribe and preferences pages take them too, so somebody clicking a link in
+your newsletter stays in your colours the whole way. Before 1.5.0 those two
+pages used only the brand colour and were otherwise white, which showed up on a
+dark design as a white page at the end of a dark email.
+
 A theme with no `theme.json` (most older themes) cannot be read, and the panel
 says so rather than applying a generic palette and calling it yours.
 

@@ -133,6 +133,7 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_public_tags` | Tags offered on the preferences page | `object[] $tags` |
 | `mailhouse_confirm_redirect` | Where confirmation sends people | `string $url, object $subscriber` |
 | `mailhouse_theme_colours` | Colours read from the theme | `array $colours` |
+| `mailhouse_brand_palette` | The front end's colours, plus `is_dark` | `array $palette` |
 | `mailhouse_notices` | The messages the popup can show | `array $messages` |
 | `mailhouse_notice_destination` | Where an email link lands | `string $url, string $key` |
 | `mailhouse_webhook_events` | Normalised events parsed from a callback | `array $events, string $provider, array $payload` |
@@ -295,6 +296,38 @@ the query argument with `replaceState` so a refresh does not replay it.
 Colours come from the email design -- surface, ink, brand -- passed as custom
 properties on the element, so the popup matches the site rather than following
 the reader's dark-mode preference into a white card on a dark site.
+
+## One palette for the front end
+
+`mailhouse_brand_palette()` is where the emails, the popup and the standalone
+pages get their colours. It reads `template_accent`, `template_card_bg` and
+`template_ink`, falls back on any that is not a usable hex, and derives the
+rest:
+
+| Slot | What it is |
+|---|---|
+| `accent`, `surface`, `ink` | Straight from the design |
+| `on_accent` | Black or white, whichever reads on the accent |
+| `muted` | The ink, softened, for secondary text |
+| `edge` | The surface, shifted, for borders that have to show against it |
+| `field` | The surface, barely shifted, for inputs and notices |
+| `is_dark` | Whether the design is dark |
+
+It exists because the three surfaces each used to work their colours out
+separately, and the standalone pages lost. They were written when there was
+only a brand colour to read, took `template_accent` and hardcoded white for
+everything else, and never caught up when the message background and text
+colours arrived in 1.3.0 -- so a dark design produced a dark email, a dark
+popup and a white preferences page. One function decides now.
+
+`is_dark` is in there because the right answer to `prefers-color-scheme`
+depends on the design. A site that has chosen a dark design should stay dark
+whatever the reader's browser asks for -- that is the rule the emails already
+followed, and the popup's reason for ignoring the preference outright. A site
+still on the light default keeps following the reader, which is what the
+standalone pages have always done. Callers need to know which they are looking
+at, so `Mailhouse_Optin::page_html()` emits the dark-mode block only for a
+light design, and sets `color-scheme` to match either way.
 
 ## Templates
 

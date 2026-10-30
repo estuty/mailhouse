@@ -300,3 +300,55 @@ function mailhouse_contrast_colour( $hex ) {
 
 	return $luminance > 0.4 ? '#111827' : '#ffffff';
 }
+
+/**
+ * The brand colours, as one palette everything on the front end lays out with.
+ *
+ * The emails, the popup and the standalone unsubscribe and preferences pages
+ * all have to agree, and each used to work its own out. That is how the
+ * standalone pages came to be white on a site whose design is dark: they were
+ * written before there was a message background to read, and never caught up.
+ * One place decides now.
+ *
+ * `is_dark` is here because the right answer to the reader's dark-mode
+ * preference depends on the design. A site that has set a dark design should
+ * stay dark whatever the reader prefers; a site still on the light default can
+ * follow them. Callers need to know which they are looking at.
+ *
+ * @return array{accent:string,surface:string,ink:string,on_accent:string,muted:string,edge:string,field:string,is_dark:bool}
+ */
+function mailhouse_brand_palette() {
+	$pick = static function ( $key, $fallback ) {
+		$colour = sanitize_hex_color( (string) mailhouse_option( $key, $fallback ) );
+
+		return $colour ? $colour : $fallback;
+	};
+
+	$accent  = $pick( 'template_accent', '#2b6cb0' );
+	$surface = $pick( 'template_card_bg', '#ffffff' );
+	$ink     = $pick( 'template_ink', '#1f2937' );
+
+	$palette = array(
+		'accent'    => $accent,
+		'surface'   => $surface,
+		'ink'       => $ink,
+		// A brand colour can be pale, and white on pale yellow is not a button
+		// anybody can read.
+		'on_accent' => mailhouse_contrast_colour( $accent ),
+		'muted'     => mailhouse_shade_colour( $ink, 0.3 ),
+		// On a dark palette a card is only a shade off the page behind it, so
+		// it needs an edge to read as a card rather than as floating text.
+		'edge'      => mailhouse_shade_colour( $surface, 0.18 ),
+		'field'     => mailhouse_shade_colour( $surface, 0.05 ),
+		// mailhouse_contrast_colour() answers white for a dark background,
+		// which is the cheapest honest way to ask whether the design is dark.
+		'is_dark'   => '#ffffff' === mailhouse_contrast_colour( $surface ),
+	);
+
+	/**
+	 * Filter the brand palette used on the front end.
+	 *
+	 * @param array $palette Colours, plus `is_dark`.
+	 */
+	return apply_filters( 'mailhouse_brand_palette', $palette );
+}
