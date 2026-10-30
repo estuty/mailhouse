@@ -169,6 +169,7 @@ class Mailhouse_Tools {
 
 		$rows = array(
 			__( 'Mailhouse version', 'mailhouse' )   => MAILHOUSE_VERSION,
+			__( 'Updates', 'mailhouse' )             => Mailhouse_Updater::status(),
 			__( 'WordPress', 'mailhouse' )           => get_bloginfo( 'version' ),
 			__( 'PHP', 'mailhouse' )                 => PHP_VERSION,
 			__( 'Database', 'mailhouse' )            => $wpdb->db_version(),

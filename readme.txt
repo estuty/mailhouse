@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -53,7 +53,27 @@ not sit in the database.
 3. Go to Mailhouse -> Tools and send a test email.
 4. Add `[mailhouse_form]` to a page, or use the Newsletter form block.
 
+Updates look after themselves from 1.4.0 onwards: new versions show up on the
+Plugins screen like any other plugin's and install with one click.
+
 == Frequently Asked Questions ==
+
+= How do updates work? =
+
+Mailhouse is not on the wordpress.org directory, so it reports its own updates
+from its releases on GitHub. A new version appears on the Plugins and Updates
+screens with its release notes and installs with one click, and WordPress's
+own plugin auto-update toggle works on it like any other plugin.
+
+Nothing is sent anywhere. The check is a read of the public releases list, no
+site data goes with it, and it runs on WordPress's existing twice-daily
+schedule. The plugin's row has a "Check for updates" link if you would rather
+not wait, and Mailhouse -> Tools -> Status says where the last check got to.
+
+Versions before 1.4.0 had no update mechanism at all, so getting to 1.4.0 is a
+manual step: download the zip from the releases page and upload it under
+Plugins -> Add New -> Upload Plugin. WordPress will spot the existing copy and
+offer to replace it. Settings, subscribers and the log are untouched.
 
 = Can it replace both my newsletter plugin and my SMTP plugin? =
 
@@ -88,6 +108,22 @@ Advanced before uninstalling.
 4. Writing a broadcast, with recipients and merge tags alongside.
 
 == Changelog ==
+
+= 1.4.0 =
+* Updates arrive like any other plugin's. A new version shows on the Plugins
+  and Updates screens with its release notes, and installs with one click.
+  There was no mechanism before: the only way to update was to download the
+  zip and upload it over the top.
+* Declares an Update URI, which also closes a real risk. Without it WordPress
+  asks wordpress.org about any plugin whose folder it recognises, so anybody
+  publishing a plugin under the slug "mailhouse" would have had it offered as
+  an update to this one -- and installing it would have overwritten it.
+* A "Check for updates" link on the plugin's row, for when you would rather
+  not wait for the twice-daily check.
+* Tools -> Status says where the last update check got to, so a check that is
+  failing says so instead of looking like a site that is up to date.
+* This version has to be installed by hand, like the ones before it. From here
+  on they are automatic.
 
 = 1.3.0 =
 * The email design can take its colours from the active theme. Settings ->

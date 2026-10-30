@@ -59,6 +59,7 @@ includes/
 ├── class-mailhouse-install.php   dbDelta schema, first-run defaults
 ├── class-mailhouse-settings.php  One option, constant overrides for secrets
 ├── class-mailhouse-crypto.php    sodium, falling back to OpenSSL
+├── class-mailhouse-updater.php   Updates from this repo's releases
 ├── mail/
 │   ├── class-mailhouse-mailer.php     Interception, sender rules, send()
 │   ├── class-mailhouse-phpmailer.php  The subclass
@@ -136,6 +137,7 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_notice_destination` | Where an email link lands | `string $url, string $key` |
 | `mailhouse_webhook_events` | Normalised events parsed from a callback | `array $events, string $provider, array $payload` |
 | `mailhouse_webhook_tolerance` | Clock skew allowed on a signed callback | `int $seconds` |
+| `mailhouse_update_repo` | Repository updates are read from | `string $repo` |
 
 ## Adding a transport
 
@@ -341,9 +343,56 @@ $result = Mailhouse_Subscribers::add(
 never quietly reactivates somebody who unsubscribed — they go back through
 confirmation.
 
+## Updates
+
+Mailhouse is not on the wordpress.org directory, so it answers for its own
+updates. The whole mechanism is one header and one filter.
+
+The header matters more than it looks:
+
+```
+ * Update URI: https://github.com/estuty/mailhouse
+```
+
+Without it, WordPress asks wordpress.org about every plugin whose folder name
+it recognises — and a plugin installed from a zip has no way of saying where it
+came from. Anybody publishing a plugin under the slug `mailhouse` would have
+had it offered as an update to this one, and installing that would have
+overwritten it. Declaring the header both stops WordPress asking wordpress.org
+and routes the question to `update_plugins_github.com` instead, the filter
+added in WordPress 5.8 and keyed on the header's host.
+
+That key is a host, not a plugin, so **every** plugin on the site that updates
+from github.com arrives at the same filter. `Mailhouse_Updater::offer()`
+therefore checks the basename it was asked about before answering — returning
+our release for somebody else's plugin would have WordPress install Mailhouse
+straight over the top of it.
+
+Two things are deliberate:
+
+- **The version comparison is left to WordPress.** `offer()` reports the latest
+  release whether or not it is newer; core files it under `response` or
+  `no_update` itself. A filter that stayed quiet when the site was current
+  would also lose the "View details" link.
+- **The release asset is required, and the source archive is never used.**
+  GitHub's `zipball_url` unpacks to a folder named after the repository and the
+  commit. WordPress installs a plugin into whatever folder the zip contains, so
+  that would land beside the existing copy as a second plugin rather than
+  replacing it. A release with no `mailhouse-<version>.zip` on it offers
+  nothing, which is the better failure.
+
+The answer is cached in a site transient for 12 hours, and a failed lookup is
+cached for 15 minutes so a renamed repository or a rate limit is not re-asked
+on every row of the Plugins screen. `Mailhouse_Updater::status()` reads that
+cache without ever making a request, which is what Tools → Status shows.
+
+Point it elsewhere with `MAILHOUSE_UPDATE_REPO` in `wp-config.php` or the
+`mailhouse_update_repo` filter. The repository has to be public: GitHub answers
+404, not 403, for a private one, so the symptom is simply no updates.
+
 ## Tests
 
-Three scripts under `tests/`, run against a real WordPress rather than mocks —
+Seven scripts under `tests/`, run against a real WordPress rather than mocks —
 the things worth checking here are `dbDelta` actually creating the tables, a
 rewrite rule actually matching, and PHPMailer actually assembling a message,
 all of which a mock would get wrong.
@@ -355,7 +404,15 @@ php tests/test-import.php    # CSV, Noptin and WP Mail SMTP importers
 php tests/test-features.php  # transports, design, digests
 php tests/test-webhooks.php  # bounce parsing and signature verification
 php tests/test-branding.php  # theme colours, the design, the popup
+php tests/test-updates.php   # the update check, start to finish
 ```
+
+`test-updates.php` stands in for GitHub with `pre_http_request` rather than
+calling it, so the shapes worth worrying about — a release with no zip, a
+renamed repository, a rate limit — can each be put in front of the code on
+demand. What is real is WordPress: it runs `wp_update_plugins()` and reads the
+transient core wrote, because the question being asked is whether core accepts
+what the filter hands it.
 
 `tests/bootstrap.php` walks up from the plugin folder looking for
 `wp-load.php`; set `MAILHOUSE_WP_ROOT` to point it somewhere else. Each script

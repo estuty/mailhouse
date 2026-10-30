@@ -55,6 +55,7 @@ class Mailhouse {
 			'queue'       => new Mailhouse_Queue(),
 			'automations' => new Mailhouse_Automations(),
 			'tracking'    => new Mailhouse_Tracking(),
+			'updater'     => new Mailhouse_Updater(),
 		);
 
 		if ( is_admin() ) {
