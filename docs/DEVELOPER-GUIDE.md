@@ -390,6 +390,54 @@ Point it elsewhere with `MAILHOUSE_UPDATE_REPO` in `wp-config.php` or the
 `mailhouse_update_repo` filter. The repository has to be public: GitHub answers
 404, not 403, for a private one, so the symptom is simply no updates.
 
+## Cutting a release
+
+`.github/workflows/release.yml` does the packaging, because the asset is
+load-bearing and forgetting it is silent — a release with no zip on it offers
+nothing to anybody, and looks exactly like a release that reached everybody.
+
+Push a `v*` tag and it builds `mailhouse-<version>.zip` and attaches it. If no
+release exists yet it opens a **draft** with the zip already on it, which keeps
+the release out of `releases/latest` until the notes are written; publishing it
+fires the workflow again, which finds the asset and checks it against the tag
+rather than replacing it. `workflow_dispatch` re-runs it for any existing tag,
+and its `force` input re-uploads.
+
+It refuses to package a few things:
+
+| Refused | Why |
+| --- | --- |
+| A tag that is not `vMAJOR.MINOR.PATCH` | the tag is the version every site compares against |
+| The tag, the `Version:` header, `MAILHOUSE_VERSION` and readme.txt's stable tag disagreeing | a tag ahead of the header is the expensive one: core installs the update, reads the old version back out of the header, and offers the same update again, for ever |
+| A missing or non-github.com `Update URI` | without it the question goes to wordpress.org |
+| A PHP file that does not parse | cheap to check on the way past |
+| A zip whose root is not a single `mailhouse/` holding that version | WordPress installs a plugin into whatever folder the zip contains |
+
+Two settings are pinned on the archive, and neither is decoration:
+
+```bash
+git -c core.autocrlf=false -c core.eol=lf archive --format=zip -6 --prefix=mailhouse/ "$TAG"
+```
+
+`git archive` applies line-ending conversion, and Git for Windows ships
+`core.autocrlf=true` in its **system** config — so the same tag archived from a
+fresh Windows clone comes out CRLF and 1.6KB larger than from a clone with it
+turned off. `-6` is git's default compression, pinned for the same reason. With
+all three fixed the tag decides the bytes: rebuilding `v1.4.0` this way
+reproduces the published asset's sha256 exactly.
+
+That reproducibility is what the verify path leans on. Where the asset is
+already attached, the workflow downloads it and diffs
+`.github/zip-manifest.php` output — every entry's name, CRC and size — instead
+of hashing the file, because `git archive` stamps the commit date as each
+entry's mtime and the commit sha as the archive comment. Two archives of
+identical trees therefore differ in bytes while their contents do not.
+
+The tag is checked out under `src/`, separately from the workflow's own
+checkout, so the helpers are always the ones from the ref that started the run
+rather than whatever happened to be in the tree being packaged — otherwise it
+could only ever build tags new enough to contain it.
+
 ## Tests
 
 Seven scripts under `tests/`, run against a real WordPress rather than mocks —

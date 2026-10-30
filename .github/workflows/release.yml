@@ -1,0 +1,292 @@
+name: Release zip
+
+# Builds mailhouse-<version>.zip from a tag and attaches it to that tag's
+# release. The asset is not a convenience: the updater will not offer a release
+# that has no zip attached, because GitHub's own source archive unpacks to a
+# folder named after the repository and the commit, and WordPress installs a
+# plugin into whatever folder the zip contains -- so it would land beside an
+# existing install as a second copy instead of replacing it.
+#
+# Three ways in, so the zip is there before anyone can see the release:
+#
+#   push of a v* tag   build, and if no release exists yet, open a draft with
+#                      the zip already attached, ready for its notes.
+#   release published  a safety net for a release made by hand. If the asset
+#                      is already there it is verified rather than replaced.
+#   manual             re-run for any existing tag; `force` re-uploads.
+#
+# The tag being built is checked out under src/, separately from this
+# repository's own checkout, so the workflow and its helpers are always the
+# ones from the ref that started it. Otherwise it could only ever build tags
+# new enough to contain it.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.4.0)'
+        required: true
+        type: string
+      force:
+        description: 'Replace the asset if it is already attached'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Work out which tag this is for
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            push)              tag="${GITHUB_REF_NAME}" ;;
+            release)           tag="${{ github.event.release.tag_name }}" ;;
+            workflow_dispatch) tag="${{ inputs.tag }}" ;;
+            *) echo "::error::unhandled event ${{ github.event_name }}"; exit 1 ;;
+          esac
+
+          # The tag names the version the updater reports, so it is what every
+          # site compares against. Anything else here is a typo.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::tag '$tag' is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Building $tag"
+
+      # This repository, for the workflow's own helpers.
+      - uses: actions/checkout@v4
+
+      # The tag, which is what actually gets packaged.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          path: src
+          fetch-depth: 0
+
+      - name: Check the tag and the plugin agree about the version
+        shell: bash
+        working-directory: src
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          strip() { tr -d '\r'; }
+
+          header=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\([0-9][^[:space:]]*\).*/\1/p' mailhouse.php | strip | head -1)
+          const=$(sed -n "s/^define( *'MAILHOUSE_VERSION', *'\([^']*\)'.*/\1/p" mailhouse.php | strip | head -1)
+          stable=$(sed -n 's/^Stable tag:[[:space:]]*\([^[:space:]]*\).*/\1/p' readme.txt | strip | head -1)
+
+          echo "tag          $VERSION"
+          echo "Version:     ${header:-(not found)}"
+          echo "constant     ${const:-(not found)}"
+          echo "Stable tag:  ${stable:-(not found)}"
+
+          fail=0
+          # A tag ahead of the header is the expensive one: WordPress installs
+          # the update, reads the old version back out of the header, and
+          # offers the same update again, for ever.
+          for pair in "plugin header:$header" "MAILHOUSE_VERSION:$const" "readme.txt stable tag:$stable"; do
+            name=${pair%%:*}
+            got=${pair#*:}
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::$name says '${got:-nothing}', tag says '$VERSION'"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
+
+      - name: Check the update header points at this repository
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          uri=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Update URI:[[:space:]]*\([^[:space:]]*\).*/\1/p' mailhouse.php | tr -d '\r' | head -1)
+
+          # Without this header WordPress asks wordpress.org about the plugin
+          # instead, and a stranger publishing under the slug would be offered
+          # as an update to it.
+          if [ -z "$uri" ]; then
+            echo "::error::no Update URI header -- updates would go to wordpress.org"
+            exit 1
+          fi
+
+          echo "Update URI: $uri"
+
+          # The filter that answers is keyed on this host, so it has to be the
+          # host the updater hooks.
+          case "$uri" in
+            https://github.com/*) ;;
+            *) echo "::error::Update URI host is not github.com"; exit 1 ;;
+          esac
+
+          # A fork whose header still names upstream builds a zip its own users
+          # will never be offered. Worth saying out loud, but it is their call.
+          want="https://github.com/${GITHUB_REPOSITORY}"
+          if [ "$uri" != "$want" ]; then
+            echo "::warning::Update URI is $uri but this is $want -- releases here will not reach installs of this build"
+          fi
+
+      - name: Lint every PHP file
+        shell: bash
+        working-directory: src
+        run: |
+          set -euo pipefail
+          php -v | head -1
+          count=0
+          while IFS= read -r f; do
+            php -l "$f" > /dev/null
+            count=$((count + 1))
+          done < <(git ls-files '*.php')
+          echo "$count files, no syntax errors"
+
+      - name: Build the zip
+        id: build
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          zip="mailhouse-${VERSION}.zip"
+
+          # Archive the tag by name rather than the checked-out HEAD, so a
+          # mislaid checkout cannot quietly package the wrong commit.
+          git -C src rev-parse --verify "refs/tags/${TAG}" > /dev/null
+
+          # --prefix is the whole point: WordPress installs a plugin into
+          # whatever folder the zip contains, and it has to be the folder the
+          # site already has, or the update lands beside it.
+          #
+          # The two -c settings are not decoration. `git archive` applies line
+          # ending conversion, and Git for Windows ships core.autocrlf=true in
+          # its system config -- so the same tag archived on a fresh Windows
+          # clone comes out CRLF and 1.6KB larger than the same tag archived
+          # here. Pinning them means the tag decides the bytes, not whoever ran
+          # the build. -6 is git's default compression, pinned for the same
+          # reason.
+          git -C src \
+            -c core.autocrlf=false \
+            -c core.eol=lf \
+            archive --format=zip -6 --prefix=mailhouse/ "$TAG" -o "${GITHUB_WORKSPACE}/${zip}"
+
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          echo "$(stat -c %s "$zip") bytes, sha256 $(sha256sum "$zip" | cut -d' ' -f1)"
+
+      - name: Check the zip is installable
+        shell: bash
+        env:
+          ZIP: ${{ steps.build.outputs.zip }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Exactly one top-level folder, named for the slug. Anything else and
+          # WordPress installs a second plugin rather than replacing one.
+          roots=$(unzip -Z1 "$ZIP" | cut -d/ -f1 | sort -u)
+          if [ "$roots" != "mailhouse" ]; then
+            echo "::error::zip root is '$roots', expected a single 'mailhouse'"
+            exit 1
+          fi
+
+          unzip -Z1 "$ZIP" | grep -qx 'mailhouse/mailhouse.php' || {
+            echo "::error::no mailhouse/mailhouse.php in the zip"; exit 1; }
+
+          # Read the version back out of the archive, not out of the checkout.
+          inzip=$(unzip -p "$ZIP" mailhouse/mailhouse.php |
+            sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\([0-9][^[:space:]]*\).*/\1/p' | head -1)
+          if [ "$inzip" != "$VERSION" ]; then
+            echo "::error::zip reports version '$inzip', expected '$VERSION'"
+            exit 1
+          fi
+
+          echo "$(unzip -Z1 "$ZIP" | wc -l) entries, mailhouse/ $inzip"
+
+      - name: Attach it to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          ZIP: ${{ steps.build.outputs.zip }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            # The tag arrived before anyone wrote the notes. A draft keeps it
+            # out of releases/latest, so no site sees the release until it is
+            # published -- and by then the zip is already on it.
+            gh release create "$TAG" "$ZIP" \
+              --draft \
+              --title "Mailhouse $VERSION" \
+              --notes "Notes still to be written. The changelog for this version is in readme.txt."
+            echo "DRAFT=1" >> "$GITHUB_ENV"
+            echo "Opened a draft release for $TAG with $ZIP attached."
+            exit 0
+          fi
+
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ZIP"; then
+            gh release upload "$TAG" "$ZIP"
+            echo "Attached $ZIP to the existing $TAG release."
+            exit 0
+          fi
+
+          if [ "${FORCE:-false}" = "true" ]; then
+            gh release upload "$TAG" "$ZIP" --clobber
+            echo "Replaced $ZIP on $TAG."
+            exit 0
+          fi
+
+          # Already attached, so check what is published is still what this tag
+          # builds, rather than overwriting it blind.
+          echo "$ZIP is already attached -- verifying it against the tag."
+          mkdir -p published
+          gh release download "$TAG" --pattern "$ZIP" --dir published
+
+          echo "published:"
+          php .github/zip-manifest.php "published/$ZIP" > published.txt
+          echo "rebuilt from $TAG:"
+          php .github/zip-manifest.php "$ZIP" > rebuilt.txt
+
+          if ! diff published.txt rebuilt.txt > /dev/null; then
+            echo "::error::the published $ZIP is not what $TAG builds"
+            diff published.txt rebuilt.txt | head -40 || true
+            exit 1
+          fi
+          echo "Identical contents ($(wc -l < rebuilt.txt) entries). Nothing to do."
+
+      - name: Say what happened
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          ZIP: ${{ steps.build.outputs.zip }}
+        run: |
+          {
+            echo "### $TAG"
+            echo
+            if [ -n "${ZIP:-}" ]; then
+              echo "- Built \`$ZIP\`"
+            fi
+            if [ "${DRAFT:-}" = "1" ]; then
+              echo "- Opened a **draft** release. Write the notes and publish it."
+            fi
+            echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
+          } >> "$GITHUB_STEP_SUMMARY"

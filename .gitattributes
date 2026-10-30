@@ -1,0 +1,4 @@
+# Kept out of the release zip. The workflow builds it with `git archive`, and
+# a plugin folder on somebody's server has no use for our CI.
+/.github         export-ignore
+/.gitattributes  export-ignore
