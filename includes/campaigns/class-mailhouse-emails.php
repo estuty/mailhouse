@@ -860,7 +860,7 @@ class Mailhouse_Emails {
 				'post_status'  => 'publish',
 				'post_title'   => __( 'Confirm your subscription', 'mailhouse' ),
 				'post_content' => __(
-					"<p>Hello {{first_name|there}},</p>\n\n<p>Please confirm you want the {{site_name}} newsletter by clicking the link below. If you did not sign up, ignore this email and nothing will be sent.</p>\n\n<p><a href=\"{{confirmation_url}}\">Confirm my subscription</a></p>\n\n<p>{{confirmation_url}}</p>",
+					"<p>Hello {{first_name|there}},</p>\n\n<p>Please confirm you want the {{site_name}} newsletter by clicking the button below. If you did not sign up, ignore this email and nothing will be sent.</p>\n\n{{confirm_button}}\n\n<p style=\"font-size:13px;\">If the button does not work, paste this into your browser:<br />{{confirmation_url}}</p>",
 					'mailhouse'
 				),
 			)

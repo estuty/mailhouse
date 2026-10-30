@@ -70,13 +70,15 @@ includes/
 │   ├── class-mailhouse-subscribers.php  CRUD, statuses, privacy tooling
 │   ├── class-mailhouse-tags.php         Tags and the pivot table
 │   ├── class-mailhouse-forms.php        Shortcode, block, endpoint
-│   └── class-mailhouse-optin.php        Confirm, unsubscribe, preferences
+│   ├── class-mailhouse-optin.php        Confirm, unsubscribe, preferences
+│   └── class-mailhouse-notice.php       The popup shown after an email link
 ├── campaigns/
 │   ├── class-mailhouse-emails.php       The mailhouse_email post type
 │   ├── class-mailhouse-queue.php        Batched sending
 │   ├── class-mailhouse-automations.php  Confirmation, welcome, new post
 │   ├── class-mailhouse-merge-tags.php   {{tag|fallback}}
 │   ├── class-mailhouse-template.php     The HTML wrapper
+│   ├── class-mailhouse-palette.php      The theme's colours, read from theme.json
 │   └── class-mailhouse-tracking.php     Signed pixels and click redirects
 └── admin/                               Screens, settings, list tables, tools
 ```
@@ -129,6 +131,9 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_campaign_headers` | Headers on bulk mail | `string[] $headers, object $subscriber` |
 | `mailhouse_public_tags` | Tags offered on the preferences page | `object[] $tags` |
 | `mailhouse_confirm_redirect` | Where confirmation sends people | `string $url, object $subscriber` |
+| `mailhouse_theme_colours` | Colours read from the theme | `array $colours` |
+| `mailhouse_notices` | The messages the popup can show | `array $messages` |
+| `mailhouse_notice_destination` | Where an email link lands | `string $url, string $key` |
 | `mailhouse_webhook_events` | Normalised events parsed from a callback | `array $events, string $provider, array $payload` |
 | `mailhouse_webhook_tolerance` | Clock skew allowed on a signed callback | `int $seconds` |
 
@@ -242,6 +247,53 @@ inflates the bounce counter and fills the log with copies of one bounce.
 site and campaign streams, which is what the settings screen and the status
 report are built from.
 
+## Theme colours
+
+`Mailhouse_Palette::detect()` returns the email colours the active theme
+implies, as setting keys to hex. It is used in two places: the "Use my theme's
+colours" button, and `seed_defaults()` on a fresh install. Never on upgrade --
+changing the look of a site's email behind its back is worse than a mismatch it
+has already accepted.
+
+Two things make the result trustworthy rather than merely plausible:
+
+- **Only what the theme declares.** `wp_theme_has_theme_json()` gates the whole
+  thing, and only the `theme` and `custom` palette tiers are read. WordPress
+  ships a default palette of its own, and presenting that as the theme's would
+  be a lie.
+- **Core's own styles are filtered out.** `wp_get_global_styles()` merges the
+  theme with core's theme.json, which declares a literal button background of
+  `#32373c` and nothing for page background, text or links. So a literal is
+  trusted for those three, while the button is accepted only when it resolves
+  through the theme's own palette -- otherwise every site would get core's grey
+  wearing the theme's name. There is a test for exactly that.
+
+Values arrive as a literal hex, as `var:preset|color|slug`, or as the CSS
+custom property that form compiles to; all three are resolved against the
+palette. Named colours and `rgb()` are left unfilled rather than guessed at.
+
+`mailhouse_shade_colour( $hex, $amount )` moves a colour toward white or black
+depending on its own lightness, which is what separates the message card from
+the page on a dark brand. `mailhouse_contrast_colour( $hex )` picks black or
+white text for a background.
+
+## The post-click popup
+
+`Mailhouse_Notice` prints a message into `wp_footer` when the request carries
+`?mailhouse_notice=<key>`, where the key names one of a fixed server-side set.
+An unrecognised key prints nothing at all, so the argument cannot be used to
+put words on the site.
+
+It is a real element, not something a script builds: mail clients open links in
+all sorts of browsers, and a confirmation nobody can see because a script did
+not run is worse than a plain page. The stylesheet and script load only on a
+request that shows one. JavaScript adds closing in place, Escape, and clearing
+the query argument with `replaceState` so a refresh does not replay it.
+
+Colours come from the email design -- surface, ink, brand -- passed as custom
+properties on the element, so the popup matches the site rather than following
+the reader's dark-mode preference into a white card on a dark site.
+
 ## Templates
 
 Both are overridable from the active theme:
@@ -302,6 +354,7 @@ php tests/test-admin.php     # every admin screen, and the form endpoint
 php tests/test-import.php    # CSV, Noptin and WP Mail SMTP importers
 php tests/test-features.php  # transports, design, digests
 php tests/test-webhooks.php  # bounce parsing and signature verification
+php tests/test-branding.php  # theme colours, the design, the popup
 ```
 
 `tests/bootstrap.php` walks up from the plugin folder looking for

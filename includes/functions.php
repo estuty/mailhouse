@@ -232,6 +232,45 @@ function mailhouse_log_debug( $message, $context = null ) {
 }
 
 /**
+ * Lift a colour slightly off itself.
+ *
+ * Used to separate the email card from the page behind it. The direction is
+ * decided by the colour's own lightness, so a dark brand gets a slightly
+ * lighter card and a light one a slightly darker page -- rather than a fixed
+ * "add white" that turns black into grey and white into nothing.
+ *
+ * @param string $hex    Starting colour, `#rrggbb`.
+ * @param float  $amount How far to move, 0 to 1.
+ * @return string `#rrggbb`.
+ */
+function mailhouse_shade_colour( $hex, $amount = 0.06 ) {
+	$clean = ltrim( (string) sanitize_hex_color( $hex ), '#' );
+
+	if ( 3 === strlen( $clean ) ) {
+		$clean = $clean[0] . $clean[0] . $clean[1] . $clean[1] . $clean[2] . $clean[2];
+	}
+
+	if ( 6 !== strlen( $clean ) ) {
+		return '#ffffff';
+	}
+
+	$amount = min( 1, max( 0, (float) $amount ) );
+
+	// A dark colour moves toward white, a light one toward black.
+	$target = '#ffffff' === mailhouse_contrast_colour( '#' . $clean ) ? 255 : 0;
+	$out    = '';
+
+	foreach ( str_split( $clean, 2 ) as $pair ) {
+		$channel = hexdec( $pair );
+		$mixed   = (int) round( $channel + ( ( $target - $channel ) * $amount ) );
+
+		$out .= str_pad( dechex( max( 0, min( 255, $mixed ) ) ), 2, '0', STR_PAD_LEFT );
+	}
+
+	return '#' . $out;
+}
+
+/**
  * Black or white, whichever reads better on a background colour.
  *
  * @param string $hex Background, `#rrggbb`.

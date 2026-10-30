@@ -72,6 +72,31 @@ and footer. Emails that arrive as a complete designed page, such as most shop
 receipts, are left alone. **Open a preview** shows the saved design;
 **Send me a test** mails it to you.
 
+#### Matching the site
+
+If your theme declares its colours — any block theme with a `theme.json` does —
+the **Colours** section shows them and offers **Use my theme's colours**. One
+click copies the brand, page, message, header and text colours across, and each
+stays editable afterwards. A brand new install picks them up on its own.
+
+There are two colours worth understanding if your site is dark:
+
+| Setting | What it is |
+|---|---|
+| **Page background** | Behind the message, like the wall. |
+| **Message background** | The card the message sits on. Keep it a shade apart from the page, or the card stops looking like a card. |
+| **Text colour** | Headings and body text. On a dark message background, pick a light one. |
+
+Mailhouse works out the rest: the footer, quote and code colours, the border,
+and whether button text should be black or white.
+
+A light design also gets a dark-mode variant for readers whose phone is in dark
+mode. A design that is already dark does not — overriding it would swap your
+colours for somebody else's greys.
+
+A theme with no `theme.json` (most older themes) cannot be read, and the panel
+says so rather than applying a generic palette and calling it yours.
+
 ### New post notifications
 
 Under **Emails** there is a **New post notification**, created switched off.
@@ -229,6 +254,17 @@ the same tab.
 1. They are stored as **pending**.
 2. They get the confirmation email. Nothing else is sent until they click.
 3. Clicking makes them **subscribed**, and the welcome email goes out.
+4. They land on your site with a short message over the top confirming it
+   worked, in your brand colours. It closes with Escape, a click outside, or
+   the button.
+
+Somebody who has just confirmed is as interested as they will ever be, so the
+site is a better place to leave them than a page with nothing on it. If you
+would rather they saw a plain confirmation page, switch **After someone
+confirms** under *Settings → Signups*.
+
+Clicking the same link twice — or a mail scanner following it — says the link
+has already been used, not that something went wrong.
 
 This is double opt-in, and it is on by default. It is what stops a bot — or
 somebody typing a stranger's address — from putting anyone on your list, and

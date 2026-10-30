@@ -185,13 +185,22 @@ class Mailhouse_Install {
 		$domain = wp_parse_url( home_url(), PHP_URL_HOST );
 		$domain = preg_replace( '/^www\./', '', (string) $domain );
 
+		// On a fresh install the theme's own colours are a far better starting
+		// point than a generic blue. Only here, never on upgrade: changing the
+		// look of a site's email behind its back would be worse than a
+		// mismatch it has already accepted.
+		$colours = Mailhouse_Palette::detect();
+
 		Mailhouse_Settings::set(
-			array(
-				'from_email'          => get_option( 'admin_email' ),
-				'from_name'           => get_bloginfo( 'name' ),
-				'campaign_from_name'  => get_bloginfo( 'name' ),
-				'campaign_from_email' => 'newsletter@' . $domain,
-				'alerts_email'        => get_option( 'admin_email' ),
+			array_merge(
+				array(
+					'from_email'          => get_option( 'admin_email' ),
+					'from_name'           => get_bloginfo( 'name' ),
+					'campaign_from_name'  => get_bloginfo( 'name' ),
+					'campaign_from_email' => 'newsletter@' . $domain,
+					'alerts_email'        => get_option( 'admin_email' ),
+				),
+				$colours
 			)
 		);
 

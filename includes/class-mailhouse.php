@@ -50,6 +50,7 @@ class Mailhouse {
 			'subscribers' => new Mailhouse_Subscribers(),
 			'forms'       => new Mailhouse_Forms(),
 			'optin'       => new Mailhouse_Optin(),
+			'notice'      => new Mailhouse_Notice(),
 			'emails'      => new Mailhouse_Emails(),
 			'queue'       => new Mailhouse_Queue(),
 			'automations' => new Mailhouse_Automations(),

@@ -42,6 +42,8 @@ class Mailhouse_Template {
 				'logo_width'      => (int) mailhouse_option( 'template_logo_width', 180 ),
 				'header_bg'       => (string) mailhouse_option( 'template_header_bg', '#ffffff' ),
 				'background'      => (string) mailhouse_option( 'template_bg', '#f3f4f6' ),
+				'card_bg'         => (string) mailhouse_option( 'template_card_bg', '#ffffff' ),
+				'ink'             => (string) mailhouse_option( 'template_ink', '#1f2937' ),
 				'social'          => self::social_links(),
 				'transactional'   => false,
 			)
@@ -60,6 +62,18 @@ class Mailhouse_Template {
 		$header_bg  = self::colour( $args['header_bg'], '#ffffff' );
 		$background = self::colour( $args['background'], '#f3f4f6' );
 		$header_ink = mailhouse_contrast_colour( $header_bg );
+		$card_bg    = self::colour( $args['card_bg'], '#ffffff' );
+		$ink        = self::colour( $args['ink'], '#1f2937' );
+		$border     = mailhouse_shade_colour( $card_bg, 0.12 );
+		$muted      = mailhouse_shade_colour( $ink, 0.35 );
+		$foot_ink   = mailhouse_shade_colour( mailhouse_contrast_colour( $background ), 0.4 );
+
+		// A reader's dark mode is only worth correcting for when the design is
+		// light. Overriding an already-dark brand would replace the site's
+		// colours with somebody else's greys -- which is the opposite of what
+		// matching the site is for.
+		$is_light = '#ffffff' !== mailhouse_contrast_colour( $card_bg );
+
 		$logo_width = min( 560, max( 40, (int) $args['logo_width'] ) );
 		$font       = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
@@ -84,16 +98,18 @@ class Mailhouse_Template {
 
 		if ( $args['preferences_url'] ) {
 			$links[] = sprintf(
-				'<a href="%s" style="color:#6b7280;">%s</a>',
+				'<a href="%1$s" style="color:%2$s;">%3$s</a>',
 				esc_url( $args['preferences_url'] ),
+				esc_attr( $foot_ink ),
 				esc_html__( 'Update your preferences', 'mailhouse' )
 			);
 		}
 
 		if ( $args['unsubscribe_url'] ) {
 			$links[] = sprintf(
-				'<a href="%s" style="color:#6b7280;">%s</a>',
+				'<a href="%1$s" style="color:%2$s;">%3$s</a>',
 				esc_url( $args['unsubscribe_url'] ),
+				esc_attr( $foot_ink ),
 				esc_html__( 'Unsubscribe', 'mailhouse' )
 			);
 		}
@@ -128,9 +144,10 @@ class Mailhouse_Template {
 		}
 
 		$footer_parts[] = sprintf(
-			'<p style="margin:12px 0 0;">&copy; %s <a href="%s" style="color:#6b7280;">%s</a></p>',
+			'<p style="margin:12px 0 0;">&copy; %1$s <a href="%2$s" style="color:%3$s;">%4$s</a></p>',
 			esc_html( wp_date( 'Y' ) ),
 			esc_url( home_url( '/' ) ),
+			esc_attr( $foot_ink ),
 			esc_html( $site )
 		);
 
@@ -161,16 +178,17 @@ class Mailhouse_Template {
 		body { margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; }
 		img { border: 0; line-height: 100%; outline: none; text-decoration: none; }
 		a { color: <?php echo esc_html( $accent ); ?>; }
-		.mh-content h1, .mh-content h2, .mh-content h3 { line-height: 1.25; margin: 0 0 12px; color: #111827; }
+		.mh-content h1, .mh-content h2, .mh-content h3 { line-height: 1.25; margin: 0 0 12px; color: <?php echo esc_html( $ink ); ?>; }
 		.mh-content p { margin: 0 0 16px; }
 		.mh-content img { max-width: 100%; height: auto; }
-		.mh-content blockquote { margin: 0 0 16px; padding: 0 0 0 16px; border-left: 3px solid #e5e7eb; color: #4b5563; }
-		.mh-content pre, .mh-content code { font-family: Menlo, Consolas, monospace; font-size: 14px; background: #f3f4f6; border-radius: 4px; }
+		.mh-content blockquote { margin: 0 0 16px; padding: 0 0 0 16px; border-left: 3px solid <?php echo esc_html( $border ); ?>; color: <?php echo esc_html( $muted ); ?>; }
+		.mh-content pre, .mh-content code { font-family: Menlo, Consolas, monospace; font-size: 14px; background: <?php echo esc_html( mailhouse_shade_colour( $card_bg, 0.06 ) ); ?>; border-radius: 4px; }
 		.mh-content pre { padding: 12px; white-space: pre-wrap; word-break: break-word; }
 		@media only screen and (max-width: 620px) {
 			.mh-wrap { width: 100% !important; }
 			.mh-pad { padding-left: 20px !important; padding-right: 20px !important; }
 		}
+<?php if ( $is_light ) : ?>
 		@media (prefers-color-scheme: dark) {
 			.mh-body, .mh-outer { background-color: #111827 !important; }
 			.mh-card { background-color: #1f2937 !important; }
@@ -178,6 +196,7 @@ class Mailhouse_Template {
 			.mh-foot, .mh-foot a { color: #9ca3af !important; }
 			.mh-content a:not(.mh-button) { color: #93c5fd !important; }
 		}
+<?php endif; ?>
 	</style>
 </head>
 <body class="mh-body" style="margin:0;padding:0;background-color:<?php echo esc_attr( $background ); ?>;">
@@ -185,14 +204,14 @@ class Mailhouse_Template {
 	<table role="presentation" class="mh-outer" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:<?php echo esc_attr( $background ); ?>;">
 		<tr>
 			<td align="center" style="padding:24px 12px;">
-				<table role="presentation" class="mh-wrap mh-card" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background-color:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
+				<table role="presentation" class="mh-wrap mh-card" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="<?php echo esc_attr( $card_bg ); ?>" style="width:600px;max-width:600px;background-color:<?php echo esc_attr( $card_bg ); ?>;border-radius:10px;overflow:hidden;border:1px solid <?php echo esc_attr( $border ); ?>;">
 					<tr>
 						<td class="mh-pad" align="center" bgcolor="<?php echo esc_attr( $header_bg ); ?>" style="padding:24px 32px;background-color:<?php echo esc_attr( $header_bg ); ?>;border-bottom:3px solid <?php echo esc_attr( $accent ); ?>;">
 							<?php echo $header; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above. ?>
 						</td>
 					</tr>
 					<tr>
-						<td class="mh-pad mh-content" style="padding:28px 32px;font-family:<?php echo esc_attr( $font ); ?>;font-size:16px;line-height:1.6;color:#1f2937;">
+						<td class="mh-pad mh-content" style="padding:28px 32px;font-family:<?php echo esc_attr( $font ); ?>;font-size:16px;line-height:1.6;color:<?php echo esc_attr( $ink ); ?>;">
 							<?php echo $content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- campaign content, authored in the admin; merge tags escaped. ?>
 						</td>
 					</tr>
@@ -200,7 +219,7 @@ class Mailhouse_Template {
 
 				<table role="presentation" class="mh-wrap" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;">
 					<tr>
-						<td class="mh-pad mh-foot" style="padding:20px 32px;font-family:<?php echo esc_attr( $font ); ?>;font-size:13px;line-height:1.6;color:#6b7280;text-align:center;">
+						<td class="mh-pad mh-foot" style="padding:20px 32px;font-family:<?php echo esc_attr( $font ); ?>;font-size:13px;line-height:1.6;color:<?php echo esc_attr( $foot_ink ); ?>;text-align:center;">
 							<?php echo implode( '', $footer_parts ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above. ?>
 						</td>
 					</tr>

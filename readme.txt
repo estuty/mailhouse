@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -88,6 +88,25 @@ Advanced before uninstalling.
 4. Writing a broadcast, with recipients and merge tags alongside.
 
 == Changelog ==
+
+= 1.3.0 =
+* The email design can take its colours from the active theme. Settings ->
+  Email design -> Colours shows what the theme declares and copies it across in
+  one click; a fresh install picks it up by itself.
+* Two new colours, so a dark brand works: the message background and the text
+  colour. Headings, quotes, code and the footer follow them, and a design that
+  is already dark is no longer overridden by the reader's dark mode.
+* After confirming, people land on the site with the message over the top
+  instead of on a bare page. It uses the brand colours, closes with Escape or a
+  click, and works without JavaScript. The old plain page is still available
+  under Signups.
+* A second click on a confirmation link now says the link has already been used
+  rather than announcing an error at somebody who did nothing wrong.
+* New {{confirm_button}} merge tag: the confirmation link as a branded button.
+  The built-in confirmation email uses it.
+* Fixed: resubscribing from the preferences page left the original signup link
+  live, so replaying it could put somebody back on the list after a later
+  unsubscribe.
 
 = 1.2.0 =
 * Bounce and complaint handling. SendGrid, Mailgun, Brevo, Postmark and Resend

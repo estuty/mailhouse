@@ -22,6 +22,7 @@ class Mailhouse_Admin_Settings {
 	public function __construct() {
 		add_action( 'admin_post_mailhouse_save_settings', array( $this, 'save' ) );
 		add_action( 'admin_post_mailhouse_rotate_webhook_key', array( $this, 'rotate_webhook_key' ) );
+		add_action( 'admin_post_mailhouse_apply_theme_colours', array( $this, 'apply_theme_colours' ) );
 	}
 
 	/**
@@ -212,18 +213,32 @@ class Mailhouse_Admin_Settings {
 					array(
 						'title'  => __( 'Colours', 'mailhouse' ),
 						'fields' => array(
-							'template_accent' => array(
-								'label'       => __( 'Brand colour (links and the line under the header)', 'mailhouse' ),
-								'type'        => 'color',
+							'theme_colours'    => array(
+								'label' => __( 'Match the site', 'mailhouse' ),
+								'type'  => 'palette',
 							),
-							'template_button' => array(
+							'template_accent'  => array(
+								'label' => __( 'Brand colour (links and the line under the header)', 'mailhouse' ),
+								'type'  => 'color',
+							),
+							'template_button'  => array(
 								'label'       => __( 'Button colour', 'mailhouse' ),
 								'type'        => 'color',
 								'description' => __( 'The button text turns black or white automatically, whichever is easier to read.', 'mailhouse' ),
 							),
-							'template_bg'     => array(
+							'template_bg'      => array(
 								'label' => __( 'Page background', 'mailhouse' ),
 								'type'  => 'color',
+							),
+							'template_card_bg' => array(
+								'label'       => __( 'Message background', 'mailhouse' ),
+								'type'        => 'color',
+								'description' => __( 'The card the message sits on. Keep it a shade apart from the page background so the message still reads as a card.', 'mailhouse' ),
+							),
+							'template_ink'     => array(
+								'label'       => __( 'Text colour', 'mailhouse' ),
+								'type'        => 'color',
+								'description' => __( 'Headings, body text and the quote and code styles follow this. On a dark message background, pick a light colour here.', 'mailhouse' ),
 							),
 						),
 					),
@@ -297,6 +312,15 @@ class Mailhouse_Admin_Settings {
 							'welcome_enabled'     => array(
 								'label' => __( 'Send the welcome email after confirmation', 'mailhouse' ),
 								'type'  => 'checkbox',
+							),
+							'confirm_destination' => array(
+								'label'       => __( 'After someone confirms', 'mailhouse' ),
+								'type'        => 'select',
+								'options'     => array(
+									'home' => __( 'Send them to the site, with a message over the top', 'mailhouse' ),
+									'page' => __( 'Show a plain confirmation page', 'mailhouse' ),
+								),
+								'description' => __( 'Somebody who has just confirmed is interested; the site is a better place to leave them than a page with nothing on it. The message uses your brand colour and can be dismissed.', 'mailhouse' ),
 							),
 							'unsubscribe_confirm' => array(
 								'label'       => __( 'Ask for confirmation before unsubscribing', 'mailhouse' ),
@@ -571,6 +595,8 @@ class Mailhouse_Admin_Settings {
 			$this->preview_field();
 		} elseif ( 'webhook' === $field['type'] ) {
 			$this->webhook_field();
+		} elseif ( 'palette' === $field['type'] ) {
+			$this->palette_field();
 		} else {
 			$this->field( $key, $field );
 		}
@@ -855,6 +881,105 @@ class Mailhouse_Admin_Settings {
 	}
 
 	/**
+	 * Print the "match the site" panel.
+	 *
+	 * Shows what the active theme declares and offers to copy it into the
+	 * fields below, rather than applying it quietly -- the point is that the
+	 * site owner can see which colours they are about to get, and change any
+	 * of them afterwards.
+	 *
+	 * @return void
+	 */
+	protected function palette_field() {
+		if ( ! Mailhouse_Palette::is_available() ) {
+			printf(
+				'<p class="description">%s</p>',
+				esc_html__( 'This theme does not declare its colours in a way WordPress can read (it has no theme.json), so they have to be set by hand below. The preview at the bottom of this tab shows the result.', 'mailhouse' )
+			);
+
+			return;
+		}
+
+		$colours = Mailhouse_Palette::detect();
+
+		if ( ! $colours ) {
+			printf(
+				'<p class="description">%s</p>',
+				esc_html__( 'This theme has a theme.json but no colours Mailhouse could recognise in it. Set them by hand below.', 'mailhouse' )
+			);
+
+			return;
+		}
+
+		$labels = array(
+			'template_accent'    => __( 'Brand', 'mailhouse' ),
+			'template_button'    => __( 'Buttons', 'mailhouse' ),
+			'template_bg'        => __( 'Page', 'mailhouse' ),
+			'template_card_bg'   => __( 'Message', 'mailhouse' ),
+			'template_header_bg' => __( 'Header', 'mailhouse' ),
+			'template_ink'       => __( 'Text', 'mailhouse' ),
+		);
+
+		echo '<div class="mailhouse-swatches">';
+
+		foreach ( $colours as $key => $colour ) {
+			$matches = $colour === mailhouse_option( $key );
+
+			printf(
+				'<span class="mailhouse-swatch"><span class="mailhouse-swatch__chip" style="background:%1$s"></span>%2$s <code>%3$s</code>%4$s</span>',
+				esc_attr( $colour ),
+				esc_html( isset( $labels[ $key ] ) ? $labels[ $key ] : $key ),
+				esc_html( $colour ),
+				$matches ? ' <span class="mailhouse-ok" title="' . esc_attr__( 'Already in use', 'mailhouse' ) . '">&#10003;</span>' : ''
+			);
+		}
+
+		echo '</div>';
+
+		printf(
+			'<p><a href="%s" class="button">%s</a></p>',
+			esc_url(
+				wp_nonce_url(
+					add_query_arg( 'action', 'mailhouse_apply_theme_colours', admin_url( 'admin-post.php' ) ),
+					'mailhouse_apply_theme_colours'
+				)
+			),
+			esc_html__( "Use my theme's colours", 'mailhouse' )
+		);
+
+		printf(
+			'<p class="description">%s</p>',
+			esc_html__( 'Copies the colours above into the fields below, overwriting what is there. Every one of them stays editable afterwards.', 'mailhouse' )
+		);
+	}
+
+	/**
+	 * Copy the theme's colours into the email design.
+	 *
+	 * @return void
+	 */
+	public function apply_theme_colours() {
+		check_admin_referer( 'mailhouse_apply_theme_colours' );
+
+		if ( ! mailhouse_can_manage() ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'mailhouse' ), '', array( 'response' => 403 ) );
+		}
+
+		$applied = Mailhouse_Palette::apply();
+
+		wp_safe_redirect(
+			mailhouse_admin_url(
+				'settings',
+				array(
+					'tab'     => 'design',
+					'updated' => $applied ? 1 : 0,
+				)
+			)
+		);
+		exit;
+	}
+
+	/**
 	 * Print the webhook endpoints and the key controls.
 	 *
 	 * Site mail and campaigns can go out through different transports, so both
@@ -991,8 +1116,8 @@ class Mailhouse_Admin_Settings {
 
 		foreach ( $tabs[ $tab ]['sections'] as $section ) {
 			foreach ( $section['fields'] as $key => $field ) {
-				// Display-only: the endpoint panel has nothing to store.
-				if ( 'webhook' === $field['type'] ) {
+				// Display-only: these panels have nothing of their own to store.
+				if ( in_array( $field['type'], array( 'webhook', 'palette' ), true ) ) {
 					continue;
 				}
 
