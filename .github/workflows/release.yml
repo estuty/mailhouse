@@ -14,6 +14,11 @@ name: Release zip
 #   release published  a safety net for a release made by hand. If the asset
 #                      is already there it is verified rather than replaced.
 #   manual             re-run for any existing tag; `force` re-uploads.
+#
+# The tag being built is checked out under src/, separately from this
+# repository's own checkout, so the workflow and its helpers are always the
+# ones from the ref that started it. Otherwise it could only ever build tags
+# new enough to contain it.
 
 on:
   push:
@@ -53,8 +58,8 @@ jobs:
             *) echo "::error::unhandled event ${{ github.event_name }}"; exit 1 ;;
           esac
 
-          # The tag names the version the updater will report, so it decides
-          # what every site compares against. Anything else here is a typo.
+          # The tag names the version the updater reports, so it is what every
+          # site compares against. Anything else here is a typo.
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
             echo "::error::tag '$tag' is not vMAJOR.MINOR.PATCH"
             exit 1
@@ -64,13 +69,19 @@ jobs:
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           echo "Building $tag"
 
+      # This repository, for the workflow's own helpers.
+      - uses: actions/checkout@v4
+
+      # The tag, which is what actually gets packaged.
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
+          path: src
           fetch-depth: 0
 
       - name: Check the tag and the plugin agree about the version
         shell: bash
+        working-directory: src
         env:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
@@ -88,9 +99,9 @@ jobs:
           echo "Stable tag:  ${stable:-(not found)}"
 
           fail=0
-          # A tag ahead of the header is the one that really hurts: WordPress
-          # installs the update, reads the old version back out of the header,
-          # and offers the same update again, for ever.
+          # A tag ahead of the header is the expensive one: WordPress installs
+          # the update, reads the old version back out of the header, and
+          # offers the same update again, for ever.
           for pair in "plugin header:$header" "MAILHOUSE_VERSION:$const" "readme.txt stable tag:$stable"; do
             name=${pair%%:*}
             got=${pair#*:}
@@ -103,6 +114,7 @@ jobs:
 
       - name: Check the update header points at this repository
         shell: bash
+        working-directory: src
         run: |
           set -euo pipefail
           uri=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Update URI:[[:space:]]*\([^[:space:]]*\).*/\1/p' mailhouse.php | tr -d '\r' | head -1)
@@ -118,7 +130,7 @@ jobs:
           echo "Update URI: $uri"
 
           # The filter that answers is keyed on this host, so it has to be the
-          # one the updater hooks.
+          # host the updater hooks.
           case "$uri" in
             https://github.com/*) ;;
             *) echo "::error::Update URI host is not github.com"; exit 1 ;;
@@ -133,6 +145,7 @@ jobs:
 
       - name: Lint every PHP file
         shell: bash
+        working-directory: src
         run: |
           set -euo pipefail
           php -v | head -1
@@ -153,13 +166,25 @@ jobs:
           set -euo pipefail
           zip="mailhouse-${VERSION}.zip"
 
+          # Archive the tag by name rather than the checked-out HEAD, so a
+          # mislaid checkout cannot quietly package the wrong commit.
+          git -C src rev-parse --verify "refs/tags/${TAG}" > /dev/null
+
           # --prefix is the whole point: WordPress installs a plugin into
           # whatever folder the zip contains, and it has to be the folder the
           # site already has, or the update lands beside it.
           #
-          # -6 is git's default, pinned so the artifact does not change bytes
-          # when the runner's git does.
-          git archive --format=zip -6 --prefix=mailhouse/ "$TAG" -o "$zip"
+          # The two -c settings are not decoration. `git archive` applies line
+          # ending conversion, and Git for Windows ships core.autocrlf=true in
+          # its system config -- so the same tag archived on a fresh Windows
+          # clone comes out CRLF and 1.6KB larger than the same tag archived
+          # here. Pinning them means the tag decides the bytes, not whoever ran
+          # the build. -6 is git's default compression, pinned for the same
+          # reason.
+          git -C src \
+            -c core.autocrlf=false \
+            -c core.eol=lf \
+            archive --format=zip -6 --prefix=mailhouse/ "$TAG" -o "${GITHUB_WORKSPACE}/${zip}"
 
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
           echo "$(stat -c %s "$zip") bytes, sha256 $(sha256sum "$zip" | cut -d' ' -f1)"
@@ -183,7 +208,7 @@ jobs:
           unzip -Z1 "$ZIP" | grep -qx 'mailhouse/mailhouse.php' || {
             echo "::error::no mailhouse/mailhouse.php in the zip"; exit 1; }
 
-          # Read the version back out of the archive, not the checkout.
+          # Read the version back out of the archive, not out of the checkout.
           inzip=$(unzip -p "$ZIP" mailhouse/mailhouse.php |
             sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\([0-9][^[:space:]]*\).*/\1/p' | head -1)
           if [ "$inzip" != "$VERSION" ]; then
@@ -206,7 +231,7 @@ jobs:
 
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             # The tag arrived before anyone wrote the notes. A draft keeps it
-            # out of releases/latest, so no site sees a release until it is
+            # out of releases/latest, so no site sees the release until it is
             # published -- and by then the zip is already on it.
             gh release create "$TAG" "$ZIP" \
               --draft \
@@ -229,26 +254,23 @@ jobs:
             exit 0
           fi
 
-          # Already attached, so check what is published is what this tag
-          # builds rather than overwriting it blind. CRCs rather than bytes:
-          # those survive a different compression level.
+          # Already attached, so check what is published is still what this tag
+          # builds, rather than overwriting it blind.
           echo "$ZIP is already attached -- verifying it against the tag."
           mkdir -p published
           gh release download "$TAG" --pattern "$ZIP" --dir published
 
-          crcs() {
-            python3 -I -c 'import sys, zipfile
-with zipfile.ZipFile(sys.argv[1]) as z:
-    for i in sorted(z.infolist(), key=lambda i: i.filename):
-        print(i.filename, i.CRC, i.file_size)' "$1"
-          }
+          echo "published:"
+          php .github/zip-manifest.php "published/$ZIP" > published.txt
+          echo "rebuilt from $TAG:"
+          php .github/zip-manifest.php "$ZIP" > rebuilt.txt
 
-          if ! diff <(crcs "published/$ZIP") <(crcs "$ZIP") > /dev/null; then
-            echo "::error::the published $ZIP does not match what $TAG builds"
-            diff <(crcs "published/$ZIP") <(crcs "$ZIP") | head -40 || true
+          if ! diff published.txt rebuilt.txt > /dev/null; then
+            echo "::error::the published $ZIP is not what $TAG builds"
+            diff published.txt rebuilt.txt | head -40 || true
             exit 1
           fi
-          echo "Matches, byte for byte in content. Nothing to do."
+          echo "Identical contents ($(wc -l < rebuilt.txt) entries). Nothing to do."
 
       - name: Say what happened
         if: always()
