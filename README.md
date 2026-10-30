@@ -53,6 +53,9 @@ mailhouse/
 - **Encrypted credentials**, or define them as constants in `wp-config.php` and
   keep them out of the database entirely.
 - **Test send** that reports what the transport actually said.
+- **Updates like any other plugin's**, reported from this repository's releases
+  rather than from wordpress.org: a new version shows on the Plugins screen
+  with its notes and installs in one click.
 
 ### Newsletter — replacing Noptin
 
@@ -68,6 +71,10 @@ mailhouse/
 - **Merge tags** with fallbacks: `{{first_name|there}}`.
 
 ## Getting started
+
+Download `mailhouse-<version>.zip` from
+[Releases](https://github.com/estuty/mailhouse/releases) — not the source
+archive, which unpacks to a folder WordPress would treat as a different plugin.
 
 1. Upload the plugin and activate it.
 2. **Mailhouse → Settings → Delivery**: pick a transport and fill it in.
@@ -104,10 +111,15 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 35 files | pass |
+| PHP lint, 56 files | pass |
 | `tests/test-core.php` — 78 assertions | pass |
-| `tests/test-admin.php` — 29 assertions | pass |
+| `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
+| `tests/test-features.php` — 80 assertions | pass |
+| `tests/test-webhooks.php` — 50 assertions | pass |
+| `tests/test-branding.php` — 62 assertions | pass |
+| `tests/test-updates.php` — 65 assertions | pass |
+| A real update installed from a published release | same folder, stays active |
 | Every admin screen and settings tab rendered | no notices or warnings |
 | Activation from cold: tables, defaults, rewrites | correct |
 | Double opt-in: confirm, replay, unsubscribe | 200 / 410 / 200 |

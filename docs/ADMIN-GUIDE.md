@@ -360,6 +360,31 @@ sending domain gets blocked, and it is not undoable.
 
 ---
 
+## Keeping it up to date
+
+Mailhouse is not on the wordpress.org directory, so it reports its own updates
+from its releases on GitHub. There is nothing to set up: a new version appears
+on **Plugins** and **Dashboard → Updates** with its release notes, and installs
+with one click. WordPress's own "enable auto-updates" toggle works on it like
+any other plugin.
+
+Nothing about the site is sent anywhere. The check reads a public list of
+releases and that is all, and it runs on the twice-daily schedule WordPress
+already uses for every other plugin.
+
+If you would rather not wait for that schedule, the plugin's row on the Plugins
+screen has a **Check for updates** link. **Tools → Status** shows where the
+last check got to, which is the place to look if an update you are expecting
+has not appeared.
+
+> **Coming from a version before 1.4.0?** Those had no update mechanism, so
+> that one step is manual. Download the zip from the releases page and upload it
+> under **Plugins → Add New → Upload Plugin**; WordPress will notice the
+> existing copy and offer to replace it. Your settings, subscribers and log are
+> not touched. Take the `mailhouse-<version>.zip` file rather than the "Source
+> code" archive — the source archive unpacks to a differently named folder, and
+> WordPress would install it as a second plugin instead of replacing this one.
+
 ## When something is wrong
 
 | Symptom | Look at |
@@ -371,5 +396,6 @@ sending domain gets blocked, and it is not undoable.
 | Two plugins fighting over delivery | The admin warns you by name. Deactivate one. |
 | Somebody stopped receiving the newsletter | Subscribers: are they Bounced? The log says why. |
 | Bounces are not being recorded | Open the endpoint URL in a browser. It should answer `{"ok":true}`; anything else means the key is wrong. |
+| No update is showing for a version you know exists | Tools → Status, the Updates row. It says whether the last check failed. |
 
 **Tools → Status** has a summary worth copying into any support request.
