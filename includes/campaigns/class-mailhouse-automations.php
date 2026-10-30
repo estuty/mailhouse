@@ -75,10 +75,10 @@ class Mailhouse_Automations {
 		$site    = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
 		$url     = Mailhouse_Optin::confirm_url( $subscriber );
 		$content = sprintf(
-			'<p>%s</p><p><a href="%s">%s</a></p><p>%s</p>',
-			esc_html__( 'Please confirm you want this newsletter by clicking the link below. If you did not sign up, ignore this email.', 'mailhouse' ),
-			esc_url( $url ),
-			esc_html__( 'Confirm my subscription', 'mailhouse' ),
+			'<p>%1$s</p>%2$s<p style="font-size:13px;">%3$s<br />%4$s</p>',
+			esc_html__( 'Please confirm you want this newsletter by clicking the button below. If you did not sign up, ignore this email.', 'mailhouse' ),
+			Mailhouse_Merge_Tags::button( $url, __( 'Confirm my subscription', 'mailhouse' ) ),
+			esc_html__( 'If the button does not work, paste this into your browser:', 'mailhouse' ),
 			esc_url( $url )
 		);
 

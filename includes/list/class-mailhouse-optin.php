@@ -158,8 +158,15 @@ class Mailhouse_Optin {
 	 */
 	protected function handle_confirm( $key ) {
 		$subscriber = Mailhouse_Subscribers::get_by_key( 'confirm_key', $key );
+		$to_site    = 'page' !== mailhouse_option( 'confirm_destination', 'home' );
 
 		if ( ! $subscriber ) {
+			// A key that no longer resolves is usually a second click or a
+			// mail scanner following the link, not an error worth a dead end.
+			if ( $to_site ) {
+				Mailhouse_Notice::redirect( 'expired' );
+			}
+
 			self::render(
 				__( 'This link has expired', 'mailhouse' ),
 				'<p>' . esc_html__( 'It may already have been used. If you are still not receiving anything, sign up again.', 'mailhouse' ) . '</p>',
@@ -167,13 +174,19 @@ class Mailhouse_Optin {
 			);
 		}
 
-		Mailhouse_Subscribers::confirm( $subscriber );
+		// False when they had already confirmed, which is worth saying
+		// differently: nothing was wrong and nothing needed doing.
+		$was_pending = Mailhouse_Subscribers::confirm( $subscriber );
 
 		$redirect = apply_filters( 'mailhouse_confirm_redirect', '', $subscriber );
 
 		if ( $redirect ) {
 			wp_safe_redirect( $redirect );
 			exit;
+		}
+
+		if ( $to_site ) {
+			Mailhouse_Notice::redirect( $was_pending ? 'confirmed' : 'already' );
 		}
 
 		self::render(
@@ -293,6 +306,11 @@ class Mailhouse_Optin {
 					array(
 						'status'       => 'subscribed',
 						'confirmed_at' => mailhouse_now(),
+						// Spend the confirmation key here too. Left alive on a
+						// subscribed row, the link in the original signup
+						// email stays replayable -- and replaying it after a
+						// later unsubscribe would put them back on the list.
+						'confirm_key'  => null,
 					)
 				);
 			}

@@ -34,6 +34,9 @@ mailhouse/
   newsletters if you want it.
 - **One design for every email.** Logo header, branded footer, social links,
   dark-mode aware -- applied to WordPress's own mail as well as campaigns.
+- **Your site's colours, read from the theme.** Any block theme's `theme.json`
+  palette becomes the email palette in one click, dark brands included. Nothing
+  generic is ever passed off as yours.
 - **New post notifications.** One email per post or a daily/weekly digest,
   sent automatically or held for review.
 - **Sender control.** Force the From address and name, set a default Reply-To,

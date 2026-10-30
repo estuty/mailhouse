@@ -149,3 +149,27 @@
 	padding-left: 12px;
 	border-left: 3px solid #dcdcde;
 }
+
+/* The "match the site" swatches on the Design tab. */
+.mailhouse-swatches {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px;
+	margin: 0 0 12px;
+}
+
+.mailhouse-swatch {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: #50575e;
+}
+
+.mailhouse-swatch__chip {
+	display: inline-block;
+	width: 20px;
+	height: 20px;
+	border: 1px solid rgba( 0, 0, 0, 0.15 );
+	border-radius: 4px;
+}

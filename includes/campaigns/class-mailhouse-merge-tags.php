@@ -30,6 +30,7 @@ class Mailhouse_Merge_Tags {
 			'unsubscribe_url'  => __( 'One-click unsubscribe link', 'mailhouse' ),
 			'preferences_url'  => __( 'Link to the preferences page', 'mailhouse' ),
 			'confirmation_url' => __( 'Double opt-in confirmation link', 'mailhouse' ),
+			'confirm_button'   => __( 'The confirmation link as a branded button', 'mailhouse' ),
 			'site_name'        => __( 'Site title', 'mailhouse' ),
 			'site_url'         => __( 'Site address', 'mailhouse' ),
 			'date'             => __( "Today's date", 'mailhouse' ),
@@ -112,7 +113,7 @@ class Mailhouse_Merge_Tags {
 	 * @return string[]
 	 */
 	public static function html_tags() {
-		return array( 'post_card', 'post_button' );
+		return array( 'post_card', 'post_button', 'confirm_button' );
 	}
 
 	/**
@@ -133,6 +134,7 @@ class Mailhouse_Merge_Tags {
 			'unsubscribe_url'  => '',
 			'preferences_url'  => '',
 			'confirmation_url' => '',
+			'confirm_button'   => '',
 			'site_name'        => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
 			'site_url'         => home_url( '/' ),
 			'date'             => wp_date( get_option( 'date_format' ) ),
@@ -155,6 +157,7 @@ class Mailhouse_Merge_Tags {
 			$values['unsubscribe_url']  = Mailhouse_Optin::unsubscribe_url( $subscriber );
 			$values['preferences_url']  = Mailhouse_Optin::preferences_url( $subscriber );
 			$values['confirmation_url'] = Mailhouse_Optin::confirm_url( $subscriber );
+			$values['confirm_button']   = self::button( $values['confirmation_url'], __( 'Confirm my subscription', 'mailhouse' ) );
 
 			foreach ( Mailhouse_Subscribers::fields( $subscriber ) as $key => $value ) {
 				if ( is_scalar( $value ) ) {
