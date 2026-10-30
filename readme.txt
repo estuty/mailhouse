@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.5.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -108,6 +108,22 @@ Advanced before uninstalling.
 4. Writing a broadcast, with recipients and merge tags alongside.
 
 == Changelog ==
+
+= 1.5.0 =
+* The unsubscribe and preferences pages take the email design's colours. They
+  only ever used the brand colour and were otherwise white, so a site whose
+  design is dark sent a dark email, showed a dark confirmation popup, and then
+  landed people on a white page. They were the one branded surface that never
+  caught up when the message background and text colours arrived in 1.3.0.
+* A design the site has set to dark now stays dark on those pages whatever the
+  reader's browser prefers, which is the rule the emails already followed. A
+  site still on the light default carries on following the reader.
+* Button and link text on those pages switches between dark and light to stay
+  readable, so a pale brand colour no longer gets white text on it.
+* The site name above the heading is now a shade softer than the heading
+  itself, rather than competing with it.
+* New mailhouse_brand_palette filter, and one place that works the colours out
+  for the emails, the popup and those pages, so they cannot drift apart again.
 
 = 1.4.0 =
 * Updates arrive like any other plugin's. A new version shows on the Plugins

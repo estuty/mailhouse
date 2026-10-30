@@ -108,19 +108,6 @@ class Mailhouse_Notice {
 	}
 
 	/**
-	 * One of the design colours, guaranteed to be a usable hex.
-	 *
-	 * @param string $key      Setting key.
-	 * @param string $fallback Colour to use when the setting is unusable.
-	 * @return string
-	 */
-	protected static function colour( $key, $fallback ) {
-		$colour = sanitize_hex_color( (string) mailhouse_option( $key, $fallback ) );
-
-		return $colour ? $colour : $fallback;
-	}
-
-	/**
 	 * The message key on this request, if any.
 	 *
 	 * @return string
@@ -161,35 +148,32 @@ class Mailhouse_Notice {
 		$messages = self::messages();
 		$message  = $messages[ $key ];
 
-		// The same colours the emails use, so the popup belongs to the site
-		// rather than looking like a plugin. Following the reader's dark-mode
-		// preference instead would put a white card on a dark site, which is
-		// the mismatch this is meant to avoid.
-		$accent  = self::colour( 'template_accent', '#2b6cb0' );
-		$surface = self::colour( 'template_card_bg', '#ffffff' );
-		$ink     = self::colour( 'template_ink', '#1f2937' );
+		// The same colours the emails and the standalone pages use, so the
+		// popup belongs to the site rather than looking like a plugin.
+		// Following the reader's dark-mode preference instead would put a
+		// white card on a dark site, which is the mismatch this is meant to
+		// avoid.
+		$brand = mailhouse_brand_palette();
 
 		$tones = array(
-			'success' => $accent,
+			'success' => $brand['accent'],
 			'warning' => '#b45309',
-			'neutral' => mailhouse_shade_colour( $ink, 0.25 ),
+			'neutral' => mailhouse_shade_colour( $brand['ink'], 0.25 ),
 		);
 
-		$tone  = isset( $tones[ $message['tone'] ] ) ? $tones[ $message['tone'] ] : $accent;
+		$tone  = isset( $tones[ $message['tone'] ] ) ? $tones[ $message['tone'] ] : $brand['accent'];
 		$close = remove_query_arg( self::QUERY );
 
 		$style = sprintf(
 			'--mailhouse-tone: %s; --mailhouse-on-tone: %s; --mailhouse-surface: %s; --mailhouse-ink: %s; --mailhouse-muted: %s; --mailhouse-edge: %s;',
 			$tone,
-			// A brand colour can be pale, and white on pale yellow is not a
-			// button anybody can read.
+			// The tone is not always the accent, so this one is still worked
+			// out here: a pale warning colour needs dark text on it too.
 			mailhouse_contrast_colour( $tone ),
-			$surface,
-			$ink,
-			mailhouse_shade_colour( $ink, 0.3 ),
-			// On a dark palette the card is only a shade off the page, so it
-			// needs an edge to read as a card rather than floating text.
-			mailhouse_shade_colour( $surface, 0.18 )
+			$brand['surface'],
+			$brand['ink'],
+			$brand['muted'],
+			$brand['edge']
 		);
 
 		?>

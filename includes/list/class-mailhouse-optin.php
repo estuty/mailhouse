@@ -424,7 +424,53 @@ class Mailhouse_Optin {
 			exit;
 		}
 
-		$accent = (string) mailhouse_option( 'template_accent', '#2b6cb0' );
+		echo self::page_html( $title, $body ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- assembled below, and the caller escapes the body.
+
+		exit;
+	}
+
+	/**
+	 * The built-in standalone page's markup.
+	 *
+	 * Separate from render() so a test can read it back without the exit.
+	 *
+	 * These pages take the same colours as the emails and the confirmation
+	 * popup. Until 1.5.0 they took only the accent and were otherwise white,
+	 * which on a site with a dark design meant a dark email, a dark popup and
+	 * then a white page -- the one branded surface that never caught up when
+	 * the message background and text colours arrived.
+	 *
+	 * @param string $title Page title.
+	 * @param string $body  Page body, already escaped.
+	 * @return string
+	 */
+	public static function page_html( $title, $body ) {
+		$brand = mailhouse_brand_palette();
+
+		$vars = sprintf(
+			'--mh-accent: %s; --mh-on-accent: %s; --mh-surface: %s; --mh-ink: %s; --mh-muted: %s; --mh-edge: %s; --mh-field: %s;',
+			$brand['accent'],
+			$brand['on_accent'],
+			$brand['surface'],
+			$brand['ink'],
+			$brand['muted'],
+			$brand['edge'],
+			$brand['field']
+		);
+
+		// A design the site has set to dark stays dark: asking the browser for
+		// `light dark` there would let a reader who prefers light override a
+		// decision that is not theirs to make, and the page would come back
+		// white. A site still on the light default keeps following the reader,
+		// which is what it has always done.
+		$scheme = $brand['is_dark'] ? 'dark' : 'light dark';
+
+		$dark = $brand['is_dark'] ? '' : '
+		@media (prefers-color-scheme: dark) {
+			:root { --mh-surface: #16181c; --mh-ink: #e8e8e8; --mh-muted: #a8acb3; --mh-edge: #3a3f47; --mh-field: #22252b; }
+		}';
+
+		ob_start();
 
 		?>
 <!DOCTYPE html>
@@ -435,26 +481,21 @@ class Mailhouse_Optin {
 	<meta name="robots" content="noindex, nofollow" />
 	<title><?php echo esc_html( $title . ' - ' . get_bloginfo( 'name' ) ); ?></title>
 	<style>
-		:root { color-scheme: light dark; --mh-accent: <?php echo esc_html( $accent ); ?>; }
-		body { margin: 0; padding: 3rem 1.25rem; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #fff; color: #1a1a1a; }
+		:root { color-scheme: <?php echo esc_html( $scheme ); ?>; <?php echo esc_html( $vars ); ?> }
+		body { margin: 0; padding: 3rem 1.25rem; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--mh-surface); color: var(--mh-ink); }
 		main { max-width: 34rem; margin: 0 auto; }
 		h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 1rem; }
 		p, fieldset { margin: 0 0 1rem; }
-		fieldset { border: 1px solid #d8d8d8; border-radius: 6px; padding: 1rem 1rem 0.25rem; }
+		fieldset { border: 1px solid var(--mh-edge); border-radius: 6px; padding: 1rem 1rem 0.25rem; }
 		legend { padding: 0 0.4rem; font-weight: 600; }
 		label { display: block; margin-bottom: 0.25rem; }
-		input[type="text"] { width: 100%; padding: 0.6rem; font-size: 1rem; border: 1px solid #b9b9b9; border-radius: 6px; background: #fff; color: inherit; }
+		input[type="text"] { width: 100%; padding: 0.6rem; font-size: 1rem; border: 1px solid var(--mh-edge); border-radius: 6px; background: var(--mh-field); color: inherit; }
 		input[type="checkbox"] { margin-right: 0.4rem; }
-		.mailhouse-button { display: inline-block; padding: 0.7rem 1.2rem; border: 0; border-radius: 6px; background: var(--mh-accent); color: #fff; font-size: 1rem; text-decoration: none; cursor: pointer; }
-		.mailhouse-notice { padding: 0.75rem 1rem; border-radius: 6px; background: #e8f4ea; }
-		.mailhouse-site { display: block; margin-bottom: 2rem; font-weight: 600; text-decoration: none; color: inherit; }
-		a { color: var(--mh-accent); }
-		@media (prefers-color-scheme: dark) {
-			body { background: #16181c; color: #e8e8e8; }
-			input[type="text"] { background: #22252b; border-color: #3a3f47; }
-			fieldset { border-color: #3a3f47; }
-			.mailhouse-notice { background: #1e3524; }
-		}
+		.mailhouse-button { display: inline-block; padding: 0.7rem 1.2rem; border: 0; border-radius: 6px; background: var(--mh-accent); color: var(--mh-on-accent); font-size: 1rem; text-decoration: none; cursor: pointer; }
+		.mailhouse-notice { padding: 0.75rem 1rem; border-radius: 6px; border-left: 3px solid var(--mh-accent); background: var(--mh-field); }
+		.mailhouse-site { display: block; margin-bottom: 2rem; font-weight: 600; text-decoration: none; color: var(--mh-muted); }
+		a { color: var(--mh-accent); }<?php echo $dark; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- a literal stylesheet fragment, no input in it. ?>
+
 	</style>
 </head>
 <body>
@@ -467,6 +508,6 @@ class Mailhouse_Optin {
 </html>
 		<?php
 
-		exit;
+		return (string) ob_get_clean();
 	}
 }
