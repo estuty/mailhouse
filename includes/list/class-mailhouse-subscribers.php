@@ -182,8 +182,9 @@ class Mailhouse_Subscribers {
 				}
 			}
 
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->update( self::table(), $updates, array( 'id' => (int) $existing->id ) );
+			// Through update() rather than straight to the table, so a change
+			// made here is announced like one made anywhere else.
+			self::update( (int) $existing->id, $updates );
 
 			if ( $tag_ids && 0 !== strpos( $action, 'kept_' ) ) {
 				Mailhouse_Tags::attach( (int) $existing->id, $tag_ids );
@@ -328,6 +329,29 @@ class Mailhouse_Subscribers {
 	}
 
 	/**
+	 * The columns that describe who a subscriber is and where they stand.
+	 *
+	 * A change to one of these is a change worth telling somebody about: it
+	 * moves the row's revision and fires `mailhouse_subscriber_updated`. The
+	 * counters and the keys are deliberately not here. `sent` moves on every
+	 * campaign, and a listener that heard about each of those would never
+	 * hear anything else.
+	 *
+	 * @var string[]
+	 */
+	const SYNCED = array(
+		'email',
+		'first_name',
+		'last_name',
+		'fields',
+		'status',
+		'source',
+		'created_at',
+		'confirmed_at',
+		'unsubscribed_at',
+	);
+
+	/**
 	 * Update columns on a subscriber.
 	 *
 	 * @param int   $id     Subscriber id.
@@ -337,10 +361,102 @@ class Mailhouse_Subscribers {
 	public static function update( $id, $fields ) {
 		global $wpdb;
 
+		$id                   = (int) $id;
 		$fields['updated_at'] = mailhouse_now();
 
+		unset( $fields['revision'] );
+
+		// Most writes are counters -- one per message sent -- and nobody is
+		// listening for those. They skip the reads the rest need.
+		if ( ! array_intersect( array_keys( $fields ), self::SYNCED ) ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			return false !== $wpdb->update( self::table(), $fields, array( 'id' => $id ) );
+		}
+
+		$before  = self::get( $id );
+		$changed = array();
+
+		if ( $before ) {
+			foreach ( self::SYNCED as $column ) {
+				if ( array_key_exists( $column, $fields ) && ! self::same_value( $column, $before->$column, $fields[ $column ] ) ) {
+					$changed[] = $column;
+				}
+			}
+		}
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		return false !== $wpdb->update( self::table(), $fields, array( 'id' => (int) $id ) );
+		$written = false !== $wpdb->update( self::table(), $fields, array( 'id' => $id ) );
+
+		if ( ! $written || ! $changed ) {
+			return $written;
+		}
+
+		self::bump_revision( array( $id ) );
+
+		/**
+		 * Fires when something about a subscriber changes: their address,
+		 * name, custom fields, status, or one of the dates that go with it.
+		 *
+		 * Not fired for the send, open and click counters, and not for a
+		 * write that sets a column to the value it already had.
+		 *
+		 * @param object   $after   The row as it is now.
+		 * @param object   $before  The row as it was.
+		 * @param string[] $changed The columns that differ.
+		 */
+		do_action( 'mailhouse_subscriber_updated', self::get( $id ), $before, $changed );
+
+		return true;
+	}
+
+	/**
+	 * Whether a new value for a column is the one already stored.
+	 *
+	 * Custom fields are compared as data, not as text: the same fields
+	 * encoded in a different order are not a change.
+	 *
+	 * @param string $column Column name.
+	 * @param mixed  $old    Stored value.
+	 * @param mixed  $new    Value about to be written.
+	 * @return bool
+	 */
+	protected static function same_value( $column, $old, $new ) {
+		if ( 'fields' !== $column ) {
+			return (string) $old === (string) $new;
+		}
+
+		$old = json_decode( (string) $old, true );
+		$new = json_decode( (string) $new, true );
+		$old = is_array( $old ) ? $old : array();
+		$new = is_array( $new ) ? $new : array();
+
+		ksort( $old );
+		ksort( $new );
+
+		return $old === $new;
+	}
+
+	/**
+	 * Move the revision of one or more subscribers on by one.
+	 *
+	 * The revision counts changes to the things in SYNCED, and to the set of
+	 * tags a subscriber holds. It is how two copies of a row can be compared
+	 * without comparing every column.
+	 *
+	 * @param int[] $ids Subscriber ids.
+	 * @return void
+	 */
+	public static function bump_revision( $ids ) {
+		global $wpdb;
+
+		$table = self::table();
+
+		foreach ( array_chunk( array_filter( array_map( 'absint', (array) $ids ) ), 500 ) as $chunk ) {
+			$placeholders = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET revision = revision + 1 WHERE id IN ({$placeholders})", $chunk ) );
+		}
 	}
 
 	/**
@@ -362,6 +478,25 @@ class Mailhouse_Subscribers {
 		$table        = self::table();
 		$pivot        = Mailhouse_Tags::pivot();
 		$queue        = Mailhouse_Install::table( 'queue' );
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$rows = (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE id IN ({$placeholders})", $ids ), OBJECT_K );
+
+		if ( $rows ) {
+			/**
+			 * Fires just before subscribers are deleted, while there is still
+			 * something to say about them. `mailhouse_subscribers_deleted`
+			 * fires afterwards with the ids alone.
+			 *
+			 * Keyed by subscriber id rather than listed, and not only for
+			 * convenience: do_action() unwraps a one-element list holding an
+			 * object, so a plain list would arrive as a bare row whenever
+			 * exactly one subscriber was deleted.
+			 *
+			 * @param array<int,object> $rows The rows about to go, keyed by id.
+			 */
+			do_action( 'mailhouse_subscribers_deleting', $rows );
+		}
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$pivot} WHERE subscriber_id IN ({$placeholders})", $ids ) );
@@ -476,6 +611,104 @@ class Mailhouse_Subscribers {
 		 * @param string $reason     What the provider said.
 		 */
 		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason );
+
+		return true;
+	}
+
+	/**
+	 * Move a subscriber to a status by decision, not by their own action.
+	 *
+	 * This is what an administrator editing a subscriber does. Leaving the
+	 * list goes through unsubscribe() and mark_bounced(), so the date is
+	 * recorded, queued mail is dropped and the usual hooks fire -- exactly as
+	 * if it had happened any other way. Joining it does not fire
+	 * `mailhouse_subscriber_confirmed`: nobody confirmed anything, and a
+	 * welcome email for a correction made in the admin would be wrong.
+	 *
+	 * @param object $subscriber Subscriber row.
+	 * @param string $status     One of statuses().
+	 * @param string $source     Who or what decided, e.g. `admin`.
+	 * @return bool Whether the status changed.
+	 */
+	public static function set_status( $subscriber, $status, $source = '' ) {
+		if ( ! $subscriber || ! array_key_exists( $status, self::statuses() ) || $status === $subscriber->status ) {
+			return false;
+		}
+
+		$id = (int) $subscriber->id;
+
+		switch ( $status ) {
+			case 'unsubscribed':
+				return self::unsubscribe( $subscriber, $source );
+
+			case 'bounced':
+				return self::mark_bounced(
+					$subscriber,
+					'admin' === $source ? __( 'Marked as bounced by an administrator.', 'mailhouse' ) : (string) $source
+				);
+
+			case 'subscribed':
+				return self::update(
+					$id,
+					array(
+						'status'       => 'subscribed',
+						'confirmed_at' => $subscriber->confirmed_at ? $subscriber->confirmed_at : mailhouse_now(),
+						// Spent here for the same reason as in confirm(): a key
+						// left alive on a subscribed row can be replayed later.
+						'confirm_key'  => null,
+					)
+				);
+
+			case 'pending':
+				return self::update(
+					$id,
+					array(
+						'status'      => 'pending',
+						// Without a key there would be nothing to confirm with.
+						'confirm_key' => $subscriber->confirm_key ? $subscriber->confirm_key : mailhouse_token( 16 ),
+					)
+				);
+		}
+
+		return false;
+	}
+
+	/**
+	 * Put somebody who unsubscribed back on the list.
+	 *
+	 * Only ever called for the owner of the address -- from their own
+	 * preferences page, reached with their own key. Nothing else may undo an
+	 * opt-out, and a bounced address cannot bring itself back.
+	 *
+	 * @param object $subscriber Subscriber row.
+	 * @param string $by         Who asked: `owner`.
+	 * @return bool Whether this call resubscribed them.
+	 */
+	public static function resubscribe( $subscriber, $by = 'owner' ) {
+		if ( ! $subscriber || 'unsubscribed' !== $subscriber->status ) {
+			return false;
+		}
+
+		self::update(
+			(int) $subscriber->id,
+			array(
+				'status'       => 'subscribed',
+				'confirmed_at' => mailhouse_now(),
+				// Spend the confirmation key here too. Left alive on a
+				// subscribed row, the link in the original signup email
+				// stays replayable -- and replaying it after a later
+				// unsubscribe would put them back on the list.
+				'confirm_key'  => null,
+			)
+		);
+
+		/**
+		 * Fires when somebody who had unsubscribed chooses to come back.
+		 *
+		 * @param object $subscriber Subscriber row.
+		 * @param string $by         Who asked.
+		 */
+		do_action( 'mailhouse_subscriber_resubscribed', self::get( (int) $subscriber->id ), $by );
 
 		return true;
 	}

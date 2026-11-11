@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.5.0
+Stable tag: 1.6.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -109,6 +109,40 @@ Advanced before uninstalling.
 
 == Changelog ==
 
+= 1.6.0 =
+Nothing new to look at. This release is about the plugin being able to say
+what it did, which the next ones depend on.
+
+* Two processes can no longer send the same queued message. The queue used to
+  read the next batch and rely on a lock to keep a second run away from it;
+  the lock had a gap. A batch is now claimed in one step that the database
+  guarantees only one run can win.
+* A database update no longer waits for somebody to log in. Schema changes
+  used to apply on the next visit to wp-admin, which a background auto-update
+  never makes -- on a site nobody logs in to, new code would have run against
+  the old tables.
+* Changed: unsubscribing somebody from the Edit subscriber screen now does
+  everything an unsubscribe does -- records the date, drops anything queued
+  for them, and tells other code. It used to change the status and nothing
+  else.
+* Changed: a custom field can no longer replace a built-in merge tag. A field
+  named unsubscribe_url used to take the place of the real link.
+* Saving a subscriber's tags only writes what changed. It used to remove every
+  tag and add them back, which reset the date on each and could leave somebody
+  with none if it was interrupted.
+* For developers: every change to a subscriber or their tags now fires a hook
+  (mailhouse_subscriber_updated, mailhouse_subscriber_tags_changed,
+  mailhouse_subscribers_deleting, mailhouse_subscriber_resubscribed,
+  mailhouse_tag_saved, mailhouse_tag_deleted), and each subscriber has a
+  revision that moves when they change.
+* For developers: Mailhouse_Mailer::last_result() says whether a send was
+  accepted, refused, or left unknown -- a timeout after the message was handed
+  over is not the same as a refusal -- and carries the provider's own id for
+  the message, which the queue now keeps. Bounce callbacks carry that id too.
+* For developers: 'no_fallback' on Mailhouse_Mailer::send() keeps the backup
+  transport out of one message.
+* Uninstalling with "delete data" switched on now removes two options it used
+  to leave behind.
 = 1.5.0 =
 * The unsubscribe and preferences pages take the email design's colours. They
   only ever used the brand colour and were otherwise white, so a site whose

@@ -140,4 +140,13 @@ class Mailhouse_Provider_Resend extends Mailhouse_Provider {
 
 		return $out;
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 'id' ) );
+	}
 }

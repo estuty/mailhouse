@@ -390,9 +390,12 @@ class Mailhouse_Subscribers_Screen {
 					'email'      => $email,
 					'first_name' => $first,
 					'last_name'  => $last,
-					'status'     => $status,
 				)
 			);
+
+			// A change of status is not just a column: leaving the list has
+			// a date, drops queued mail and tells whoever is listening.
+			Mailhouse_Subscribers::set_status( Mailhouse_Subscribers::get( $id ), $status, 'admin' );
 
 			Mailhouse_Tags::set( $id, $tags );
 

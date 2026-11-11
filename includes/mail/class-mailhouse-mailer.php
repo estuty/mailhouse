@@ -58,6 +58,28 @@ class Mailhouse_Mailer {
 	protected static $own = false;
 
 	/**
+	 * What became of the message most recently sent, or null before a
+	 * transport has said.
+	 *
+	 * @var array|null
+	 */
+	protected static $result = null;
+
+	/**
+	 * Whether the message being sent got as far as a transport.
+	 *
+	 * @var bool
+	 */
+	protected static $started = false;
+
+	/**
+	 * Whether the backup transport is ruled out for the message being sent.
+	 *
+	 * @var bool
+	 */
+	protected static $no_fallback = false;
+
+	/**
 	 * The stream currently being sent.
 	 *
 	 * @return string
@@ -433,8 +455,10 @@ class Mailhouse_Mailer {
 	 * @param string $subject     Subject.
 	 * @param string $html        HTML body.
 	 * @param array  $args        Optional: text, headers, from, from_name, reply_to,
-	 *                            campaign_id, subscriber_id, attachments.
-	 * @return bool
+	 *                            campaign_id, subscriber_id, attachments, and
+	 *                            no_fallback to keep the backup transport out
+	 *                            of this one message.
+	 * @return bool Whether the transport accepted it. last_result() says more.
 	 */
 	public static function send( $to, $subject, $html, $args = array() ) {
 		$args = wp_parse_args(
@@ -448,6 +472,7 @@ class Mailhouse_Mailer {
 				'campaign_id'   => 0,
 				'subscriber_id' => 0,
 				'attachments'   => array(),
+				'no_fallback'   => false,
 			)
 		);
 
@@ -483,20 +508,126 @@ class Mailhouse_Mailer {
 
 		add_action( 'phpmailer_init', $callback, 30 );
 
-		self::$own    = true;
-		self::$stream = ( $args['campaign_id'] || $args['subscriber_id'] ) ? 'campaign' : 'site';
+		self::$own         = true;
+		self::$stream      = ( $args['campaign_id'] || $args['subscriber_id'] ) ? 'campaign' : 'site';
+		self::$no_fallback = (bool) $args['no_fallback'];
+		self::$result      = null;
+		self::$started     = false;
 
 		try {
 			$sent = wp_mail( $to, $subject, $html, $headers, (array) $args['attachments'] );
 		} finally {
-			self::$own    = false;
-			self::$stream = 'site';
+			self::$own         = false;
+			self::$stream      = 'site';
+			self::$no_fallback = false;
 		}
 
 		remove_action( 'phpmailer_init', $callback, 30 );
 
 		Mailhouse_Log::set_context( array() );
 
+		// Nothing reported a result: wp_mail() was answered by another plugin
+		// before a transport was reached, or it gave up while still building
+		// the message, or a transport that predates results was used.
+		if ( null === self::$result ) {
+			if ( $sent ) {
+				self::set_result( array( 'outcome' => 'accepted' ) );
+			} elseif ( self::$started ) {
+				self::set_result(
+					array(
+						'outcome' => 'ambiguous',
+						'error'   => __( 'The transport failed without saying whether the message had gone.', 'mailhouse' ),
+					)
+				);
+			} else {
+				self::set_result(
+					array(
+						'outcome' => 'rejected',
+						'error'   => __( 'The message did not reach a transport.', 'mailhouse' ),
+					)
+				);
+			}
+		}
+
 		return $sent;
+	}
+
+	/**
+	 * What became of the message most recently sent.
+	 *
+	 * `true` or `false` from send() cannot tell "the server said no" from
+	 * "the connection dropped and nobody knows". The first is safe to try
+	 * again; the second may already be in somebody's inbox. This can:
+	 *
+	 * - `accepted`  -- the transport took it. `message_id` is what it called
+	 *                  the message, where it said.
+	 * - `rejected`  -- it definitely did not go. `permanent` is true when
+	 *                  trying again will not help.
+	 * - `ambiguous` -- it may or may not have gone.
+	 *
+	 * @return array{outcome:string,permanent:bool,message_id:string,error:string}
+	 */
+	public static function last_result() {
+		return null === self::$result ? self::blank_result() : self::$result;
+	}
+
+	/**
+	 * Record what became of the message being sent. For transports.
+	 *
+	 * @param array $result Any of outcome, permanent, message_id, error.
+	 * @return void
+	 */
+	public static function set_result( array $result ) {
+		$result = array_merge( self::blank_result(), $result );
+
+		self::$result = array(
+			'outcome'    => in_array( $result['outcome'], array( 'accepted', 'rejected', 'ambiguous' ), true ) ? $result['outcome'] : 'ambiguous',
+			'permanent'  => 'rejected' === $result['outcome'] && (bool) $result['permanent'],
+			'message_id' => trim( (string) $result['message_id'], " \t\n\r<>" ),
+			'error'      => (string) $result['error'],
+		);
+	}
+
+	/**
+	 * Whether a transport has already said what happened.
+	 *
+	 * @return bool
+	 */
+	public static function has_result() {
+		return null !== self::$result;
+	}
+
+	/**
+	 * Start a fresh attempt: forget the last result, note that a transport
+	 * has been reached.
+	 *
+	 * @return void
+	 */
+	public static function begin_attempt() {
+		self::$result  = null;
+		self::$started = true;
+	}
+
+	/**
+	 * Whether the backup transport may be tried for the current message.
+	 *
+	 * @return bool
+	 */
+	public static function fallback_allowed() {
+		return ! self::$no_fallback;
+	}
+
+	/**
+	 * A result with nothing in it.
+	 *
+	 * @return array{outcome:string,permanent:bool,message_id:string,error:string}
+	 */
+	protected static function blank_result() {
+		return array(
+			'outcome'    => '',
+			'permanent'  => false,
+			'message_id' => '',
+			'error'      => '',
+		);
 	}
 }

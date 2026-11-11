@@ -65,9 +65,11 @@ class Mailhouse {
 		add_filter( 'cron_schedules', array( $this, 'cron_schedules' ) ); // phpcs:ignore WordPress.WP.CronInterval.ChangeDetected
 		add_action( 'init', array( $this, 'schedule_events' ) );
 
-		// An upload-over-the-top upgrade never fires the activation hook, so
-		// the schema check repeats on admin load. It costs one option read.
-		add_action( 'admin_init', array( 'Mailhouse_Install', 'install' ) );
+		// Neither an upload-over-the-top upgrade nor a background auto-update
+		// fires the activation hook, so the schema check repeats on every
+		// request -- at priority 0, before the webhook and tracking handlers
+		// that write to these tables at priority 1. It costs one option read.
+		add_action( 'init', array( 'Mailhouse_Install', 'maybe_install' ), 0 );
 
 		/**
 		 * Fires once every module is loaded.
