@@ -111,7 +111,7 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 57 files | pass |
+| PHP lint, 59 files | pass |
 | `tests/test-core.php` — 78 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
@@ -119,6 +119,8 @@ mocks.
 | `tests/test-webhooks.php` — 50 assertions | pass |
 | `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
+| `tests/test-foundations.php` — 156 assertions | pass |
+| Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |
 | Unsubscribe and preferences pages under a dark, a light and a pale design | brand colours throughout, button text readable on all three |

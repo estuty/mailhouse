@@ -427,7 +427,7 @@ class Mailhouse_Webhooks {
 	 *
 	 * @param string $provider Provider id.
 	 * @param array  $payload  Decoded body.
-	 * @return array<int,array{email:string,type:string,reason:string}>
+	 * @return array<int,array{email:string,type:string,reason:string,message_id:string,event_id:string,occurred_at:int}>
 	 */
 	protected static function events( $provider, $payload ) {
 		$events = array();
@@ -476,10 +476,15 @@ class Mailhouse_Webhooks {
 					}
 
 					if ( $type && ! empty( $item['email'] ) ) {
-						$events[] = array(
-							'email'  => (string) $item['email'],
-							'type'   => $type,
-							'reason' => $reason,
+						$events[] = self::event(
+							$item['email'],
+							$type,
+							$reason,
+							// The part before the first dot is the id the send
+							// call returned; the rest is SendGrid's own routing.
+							isset( $item['sg_message_id'] ) && is_scalar( $item['sg_message_id'] ) ? strtok( (string) $item['sg_message_id'], '.' ) : '',
+							isset( $item['sg_event_id'] ) ? $item['sg_event_id'] : '',
+							isset( $item['timestamp'] ) ? $item['timestamp'] : 0
 						);
 					}
 				}
@@ -528,10 +533,13 @@ class Mailhouse_Webhooks {
 				}
 
 				if ( $type && ! empty( $data['recipient'] ) ) {
-					$events[] = array(
-						'email'  => (string) $data['recipient'],
-						'type'   => $type,
-						'reason' => $reason,
+					$events[] = self::event(
+						$data['recipient'],
+						$type,
+						$reason,
+						isset( $data['message']['headers']['message-id'] ) ? $data['message']['headers']['message-id'] : '',
+						isset( $data['id'] ) ? $data['id'] : '',
+						isset( $data['timestamp'] ) ? $data['timestamp'] : 0
 					);
 				}
 				break;
@@ -566,10 +574,22 @@ class Mailhouse_Webhooks {
 				}
 
 				if ( $type && ! empty( $payload['email'] ) ) {
-					$events[] = array(
-						'email'  => (string) $payload['email'],
-						'type'   => $type,
-						'reason' => isset( $payload['reason'] ) ? (string) $payload['reason'] : '',
+					$when = 0;
+
+					foreach ( array( 'ts_event', 'ts' ) as $field ) {
+						if ( ! empty( $payload[ $field ] ) ) {
+							$when = $payload[ $field ];
+							break;
+						}
+					}
+
+					$events[] = self::event(
+						$payload['email'],
+						$type,
+						isset( $payload['reason'] ) ? (string) $payload['reason'] : '',
+						isset( $payload['message-id'] ) ? $payload['message-id'] : '',
+						isset( $payload['id'] ) ? $payload['id'] : '',
+						$when
 					);
 				}
 				break;
@@ -602,10 +622,22 @@ class Mailhouse_Webhooks {
 				}
 
 				if ( $type && ! empty( $payload['Email'] ) ) {
-					$events[] = array(
-						'email'  => (string) $payload['Email'],
-						'type'   => $type,
-						'reason' => $reason,
+					$when = '';
+
+					foreach ( array( 'BouncedAt', 'DeliveredAt', 'ChangedAt' ) as $field ) {
+						if ( ! empty( $payload[ $field ] ) && is_string( $payload[ $field ] ) ) {
+							$when = $payload[ $field ];
+							break;
+						}
+					}
+
+					$events[] = self::event(
+						$payload['Email'],
+						$type,
+						$reason,
+						isset( $payload['MessageID'] ) ? $payload['MessageID'] : '',
+						isset( $payload['ID'] ) ? $payload['ID'] : '',
+						$when
 					);
 				}
 				break;
@@ -632,10 +664,14 @@ class Mailhouse_Webhooks {
 
 				foreach ( $recipients as $recipient ) {
 					if ( $type && is_string( $recipient ) ) {
-						$events[] = array(
-							'email'  => $recipient,
-							'type'   => $type,
-							'reason' => $reason,
+						$events[] = self::event(
+							$recipient,
+							$type,
+							$reason,
+							isset( $data['email_id'] ) ? $data['email_id'] : '',
+							// Svix names each delivery in a header, not the body.
+							isset( $_SERVER['HTTP_SVIX_ID'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_SVIX_ID'] ) ) : '',
+							isset( $payload['created_at'] ) ? $payload['created_at'] : ''
 						);
 					}
 				}
@@ -650,6 +686,44 @@ class Mailhouse_Webhooks {
 		 * @param array  $payload  Decoded body.
 		 */
 		return apply_filters( 'mailhouse_webhook_events', $events, $provider, $payload );
+	}
+
+	/**
+	 * One normalised event.
+	 *
+	 * The last three say *which* message and *which* notification this is,
+	 * where the provider says. Nothing here acts on them yet; they are what
+	 * lets a bounce be matched to the message that bounced, and a repeated
+	 * notification be recognised as a repeat.
+	 *
+	 * @param mixed  $email      Recipient address.
+	 * @param string $type       hard, soft, complaint, unsubscribe or delivered.
+	 * @param string $reason     What the provider said.
+	 * @param mixed  $message_id The provider's id for the message.
+	 * @param mixed  $event_id   The provider's id for this notification.
+	 * @param mixed  $when       When it happened: a Unix time or a date string.
+	 * @return array{email:string,type:string,reason:string,message_id:string,event_id:string,occurred_at:int}
+	 */
+	protected static function event( $email, $type, $reason, $message_id = '', $event_id = '', $when = 0 ) {
+		if ( is_numeric( $when ) ) {
+			$when = (int) $when;
+
+			// Milliseconds, from the providers that count in those.
+			if ( $when > 100000000000 ) {
+				$when = (int) floor( $when / 1000 );
+			}
+		} else {
+			$when = is_string( $when ) && '' !== $when ? (int) strtotime( $when ) : 0;
+		}
+
+		return array(
+			'email'       => is_scalar( $email ) ? (string) $email : '',
+			'type'        => (string) $type,
+			'reason'      => (string) $reason,
+			'message_id'  => is_scalar( $message_id ) ? trim( (string) $message_id, " \t\n\r<>" ) : '',
+			'event_id'    => is_scalar( $event_id ) ? (string) $event_id : '',
+			'occurred_at' => max( 0, $when ),
+		);
 	}
 
 	/**

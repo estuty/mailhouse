@@ -168,4 +168,13 @@ class Mailhouse_Provider_SparkPost extends Mailhouse_Provider {
 	public function line( $address ) {
 		return mailhouse_format_address( $address['email'], $address['name'] );
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 'results', 'id' ) );
+	}
 }

@@ -151,4 +151,13 @@ class Mailhouse_Provider_SMTP2GO extends Mailhouse_Provider {
 
 		return $out;
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 'data', 'email_id' ) );
+	}
 }

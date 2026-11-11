@@ -238,4 +238,13 @@ class Mailhouse_Provider_SES extends Mailhouse_Provider {
 			),
 		);
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 'MessageId' ) );
+	}
 }

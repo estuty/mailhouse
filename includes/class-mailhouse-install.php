@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.1.0';
+	const DB_VERSION = '1.2.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -32,6 +32,45 @@ class Mailhouse_Install {
 		global $wpdb;
 
 		return $wpdb->prefix . 'mailhouse_' . $name;
+	}
+
+	/**
+	 * Option held while one request is upgrading the schema.
+	 */
+	const LOCK_OPTION = 'mailhouse_install_lock';
+
+	/**
+	 * Bring the schema up to date on whatever request notices it is behind.
+	 *
+	 * Neither the activation hook nor `admin_init` fires when WordPress
+	 * updates a plugin in the background, so on a site nobody logs in to the
+	 * new code would otherwise run against the old tables indefinitely. This
+	 * runs on `init`, ahead of the webhook and tracking handlers, and costs
+	 * one read of an autoloaded option once the schema is current.
+	 *
+	 * @return void
+	 */
+	public static function maybe_install() {
+		if ( get_option( self::DB_OPTION ) === self::DB_VERSION ) {
+			return;
+		}
+
+		// add_option() is an INSERT against a unique key, so of two requests
+		// arriving together only one gets to do the work. A lock older than
+		// five minutes belongs to a request that died holding it.
+		if ( ! add_option( self::LOCK_OPTION, time(), '', false ) ) {
+			$held = (int) get_option( self::LOCK_OPTION );
+
+			if ( $held && ( time() - $held ) < 5 * MINUTE_IN_SECONDS ) {
+				return;
+			}
+
+			update_option( self::LOCK_OPTION, time(), false );
+		}
+
+		self::install();
+
+		delete_option( self::LOCK_OPTION );
 	}
 
 	/**
@@ -79,6 +118,7 @@ class Mailhouse_Install {
 				confirmed_at datetime DEFAULT NULL,
 				unsubscribed_at datetime DEFAULT NULL,
 				updated_at datetime NOT NULL,
+				revision int(10) unsigned NOT NULL DEFAULT 0,
 				PRIMARY KEY  (id),
 				UNIQUE KEY email (email),
 				KEY status (status),
@@ -131,10 +171,18 @@ class Mailhouse_Install {
 				clicked_at datetime DEFAULT NULL,
 				opens int(10) unsigned NOT NULL DEFAULT 0,
 				clicks int(10) unsigned NOT NULL DEFAULT 0,
+				claim_token varchar(32) DEFAULT NULL,
+				claimed_at datetime DEFAULT NULL,
+				provider_message_id varchar(191) DEFAULT NULL,
+				remote_job_id char(36) DEFAULT NULL,
+				reported tinyint(3) unsigned NOT NULL DEFAULT 0,
 				PRIMARY KEY  (id),
 				UNIQUE KEY campaign_subscriber (campaign_id,subscriber_id),
+				UNIQUE KEY remote_job (remote_job_id),
 				KEY status_scheduled (status,scheduled_at),
-				KEY campaign_status (campaign_id,status)
+				KEY campaign_status (campaign_id,status),
+				KEY claim (claim_token),
+				KEY report (reported,id)
 			) {$collate};"
 		);
 

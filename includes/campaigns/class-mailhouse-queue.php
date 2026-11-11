@@ -237,7 +237,12 @@ class Mailhouse_Queue {
 			return 0;
 		}
 
+		// The transient keeps the pace to one batch a minute, which is what
+		// "emails per minute" in the settings promises. It is not what stops
+		// two runs sending the same message: claim() is.
 		set_transient( 'mailhouse_queue_lock', 1, 2 * MINUTE_IN_SECONDS );
+
+		self::reap_stale();
 
 		$batch = max( 1, (int) mailhouse_option( 'batch_size', 20 ) );
 		$rows  = self::claim( $batch );
@@ -256,6 +261,11 @@ class Mailhouse_Queue {
 			}
 		}
 
+		// Whatever the time budget did not reach goes back for the next run.
+		if ( $rows ) {
+			self::release( $rows[0]->claim_token );
+		}
+
 		foreach ( array_unique( wp_list_pluck( $rows, 'campaign_id' ) ) as $campaign_id ) {
 			self::maybe_finish( (int) $campaign_id );
 		}
@@ -266,22 +276,99 @@ class Mailhouse_Queue {
 	}
 
 	/**
-	 * Take the next batch of due rows.
+	 * How long a claimed row may sit unsent before it is taken to have been
+	 * abandoned by a process that died.
+	 */
+	const STALE_AFTER = 600; // 10 minutes.
+
+	/**
+	 * Take the next batch of due rows, and nobody else's.
+	 *
+	 * One UPDATE decides which rows belong to this run: it marks them as
+	 * being sent and stamps them with a token, and the database guarantees
+	 * that two runs arriving together come away with different rows. Reading
+	 * the rows first and marking them afterwards -- which is what this did
+	 * before -- leaves a gap in which both read the same ones.
+	 *
+	 * It also means a row says `sending` before anything is handed to a
+	 * transport, so a process that dies part-way leaves evidence of where
+	 * it was.
 	 *
 	 * @param int $limit Batch size.
-	 * @return object[]
+	 * @return object[] The claimed rows, each carrying the batch's claim_token.
 	 */
-	protected static function claim( $limit ) {
+	public static function claim( $limit ) {
+		global $wpdb;
+
+		$table = self::table();
+		$token = mailhouse_token( 16 );
+		$now   = mailhouse_now();
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$claimed = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET status = 'sending', claim_token = %s, claimed_at = %s
+				 WHERE status = 'pending' AND scheduled_at <= %s
+				 ORDER BY scheduled_at ASC, id ASC LIMIT %d",
+				$token,
+				$now,
+				$now,
+				max( 1, (int) $limit )
+			)
+		);
+
+		if ( ! $claimed ) {
+			return array();
+		}
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return (array) $wpdb->get_results(
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE claim_token = %s ORDER BY scheduled_at ASC, id ASC", $token )
+		);
+	}
+
+	/**
+	 * Hand back rows that were claimed and never attempted.
+	 *
+	 * @param string $token The claim to release; empty releases every claim,
+	 *                      which is only right when nothing can be sending.
+	 * @return int Rows returned to the queue.
+	 */
+	public static function release( $token = '' ) {
+		global $wpdb;
+
+		$table = self::table();
+
+		if ( '' === (string) $token ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+			return (int) $wpdb->query( "UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending'" );
+		}
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return (int) $wpdb->query(
+			$wpdb->prepare( "UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending' AND claim_token = %s", $token )
+		);
+	}
+
+	/**
+	 * Recover rows claimed by a run that never finished.
+	 *
+	 * They go back to pending and are tried again, which is what happened to
+	 * them before claims existed: a run that died left its rows untouched,
+	 * and the next one picked them up.
+	 *
+	 * @return int Rows recovered.
+	 */
+	public static function reap_stale() {
 		global $wpdb;
 
 		$table = self::table();
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		return (array) $wpdb->get_results(
+		return (int) $wpdb->query(
 			$wpdb->prepare(
-				"SELECT * FROM {$table} WHERE status = 'pending' AND scheduled_at <= %s ORDER BY scheduled_at ASC, id ASC LIMIT %d",
-				mailhouse_now(),
-				(int) $limit
+				"UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending' AND claimed_at < %s",
+				gmdate( 'Y-m-d H:i:s', time() - self::STALE_AFTER )
 			)
 		);
 	}
@@ -293,21 +380,17 @@ class Mailhouse_Queue {
 	 * @return bool
 	 */
 	protected static function send_row( $row ) {
-		global $wpdb;
-
 		$subscriber = Mailhouse_Subscribers::get( (int) $row->subscriber_id );
 
 		// Somebody who unsubscribed after the campaign was queued must not get
 		// it. This is the check that makes that true.
 		if ( ! $subscriber || 'subscribed' !== $subscriber->status ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->update(
-				self::table(),
+			self::settle(
+				$row,
 				array(
 					'status' => 'skipped',
 					'error'  => __( 'No longer subscribed.', 'mailhouse' ),
-				),
-				array( 'id' => (int) $row->id )
+				)
 			);
 
 			return false;
@@ -316,14 +399,12 @@ class Mailhouse_Queue {
 		$message = Mailhouse_Emails::render( (int) $row->campaign_id, $subscriber );
 
 		if ( '' === $message['subject'] ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->update(
-				self::table(),
+			self::settle(
+				$row,
 				array(
 					'status' => 'failed',
 					'error'  => __( 'The email no longer exists.', 'mailhouse' ),
-				),
-				array( 'id' => (int) $row->id )
+				)
 			);
 
 			return false;
@@ -347,16 +428,20 @@ class Mailhouse_Queue {
 		);
 
 		if ( $sent ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->update(
-				self::table(),
+			$result = Mailhouse_Mailer::last_result();
+
+			self::settle(
+				$row,
 				array(
-					'status'   => 'sent',
-					'sent_at'  => mailhouse_now(),
-					'attempts' => (int) $row->attempts + 1,
-					'error'    => '',
-				),
-				array( 'id' => (int) $row->id )
+					'status'              => 'sent',
+					'sent_at'             => mailhouse_now(),
+					'attempts'            => (int) $row->attempts + 1,
+					'error'               => '',
+					// What the transport called this message, where it said.
+					// It is the only thing a bounce reported hours later can
+					// be matched back to.
+					'provider_message_id' => '' !== $result['message_id'] ? substr( $result['message_id'], 0, 191 ) : null,
+				)
 			);
 
 			Mailhouse_Subscribers::update( (int) $subscriber->id, array( 'sent' => (int) $subscriber->sent + 1 ) );
@@ -367,9 +452,8 @@ class Mailhouse_Queue {
 		$attempts = (int) $row->attempts + 1;
 		$failed   = $attempts >= 3;
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$wpdb->update(
-			self::table(),
+		self::settle(
+			$row,
 			array(
 				'status'       => $failed ? 'failed' : 'pending',
 				'attempts'     => $attempts,
@@ -377,11 +461,27 @@ class Mailhouse_Queue {
 				// Back off rather than hammering a transport that is refusing
 				// everything.
 				'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + ( $attempts * 5 * MINUTE_IN_SECONDS ) ),
-			),
-			array( 'id' => (int) $row->id )
+			)
 		);
 
 		return false;
+	}
+
+	/**
+	 * Record what became of a claimed row, and let go of the claim.
+	 *
+	 * @param object $row    Queue row.
+	 * @param array  $fields Column/value pairs.
+	 * @return void
+	 */
+	protected static function settle( $row, $fields ) {
+		global $wpdb;
+
+		$fields['claim_token'] = null;
+		$fields['claimed_at']  = null;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->update( self::table(), $fields, array( 'id' => (int) $row->id ) );
 	}
 
 	/**
@@ -456,7 +556,7 @@ class Mailhouse_Queue {
 			$wpdb->prepare(
 				"SELECT
 					COUNT(*) AS total,
-					SUM(status = 'pending') AS pending,
+					SUM(status IN ('pending', 'sending')) AS pending,
 					SUM(status = 'sent') AS sent,
 					SUM(status = 'failed') AS failed,
 					SUM(status = 'skipped') AS skipped,
@@ -488,7 +588,7 @@ class Mailhouse_Queue {
 		$table = self::table();
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table} WHERE status = 'pending'" );
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table} WHERE status IN ('pending', 'sending')" );
 	}
 
 	/**

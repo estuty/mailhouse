@@ -147,4 +147,13 @@ class Mailhouse_Provider_Mandrill extends Mailhouse_Provider {
 
 		return true;
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 0, '_id' ) );
+	}
 }

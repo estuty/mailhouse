@@ -173,4 +173,13 @@ class Mailhouse_Provider_Postmark extends Mailhouse_Provider {
 	protected function one_line( $name, $email ) {
 		return mailhouse_format_address( $email, $name );
 	}
+
+	/**
+	 * The id this provider gave the message it just accepted.
+	 *
+	 * @return string
+	 */
+	public function message_id() {
+		return $this->response_value( array( 'MessageID' ) );
+	}
 }

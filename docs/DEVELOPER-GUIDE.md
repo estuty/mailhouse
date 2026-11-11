@@ -92,13 +92,21 @@ is no build step and no generated map.
 
 | Table | Holds |
 |---|---|
-| `{prefix}mailhouse_subscribers` | One row per address. `manage_key` is the unsubscribe token; `confirm_key` is cleared on confirmation. |
+| `{prefix}mailhouse_subscribers` | One row per address. `manage_key` is the unsubscribe token; `confirm_key` is cleared on confirmation. `revision` counts changes to who the subscriber is and where they stand — see [Watching the list change](#watching-the-list-change). |
 | `{prefix}mailhouse_tags` | Tags. |
 | `{prefix}mailhouse_subscriber_tags` | Pivot, primary key on both columns. |
-| `{prefix}mailhouse_queue` | One row per recipient per campaign. Unique on `(campaign_id, subscriber_id)` — that key is what makes a double-click on Send harmless. Rows stay after sending and carry the open and click counts. |
+| `{prefix}mailhouse_queue` | One row per recipient per campaign. Unique on `(campaign_id, subscriber_id)` — that key is what makes a double-click on Send harmless. Rows stay after sending and carry the open and click counts, and the id the transport gave the message. `claim_token` and `claimed_at` mark a row a batch has taken; `remote_job_id` and `reported` are reserved. |
 | `{prefix}mailhouse_log` | One row per `wp_mail()` call. |
 
 Every timestamp is UTC. `mailhouse_date()` converts on the way out.
+
+Schema changes apply themselves on the next request of any kind.
+`Mailhouse_Install::maybe_install()` runs on `init` at priority 0, ahead of the
+webhook and tracking handlers, and costs one read of an autoloaded option once
+the schema is current. It used to run on `admin_init` only, which a background
+auto-update never reaches: on a site nobody logs in to, new code would have
+run against old tables indefinitely. Two requests arriving together do not
+both run it.
 
 ## Hooks
 
@@ -108,10 +116,16 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 |---|---|---|
 | `mailhouse_loaded` | Every module is up | `Mailhouse $plugin` |
 | `mailhouse_subscriber_added` | A row is created, confirmed or not | `object $subscriber` |
+| `mailhouse_subscriber_updated` | An address, name, custom field, status or one of its dates changes | `object $after, object $before, string[] $changed` |
 | `mailhouse_subscriber_confirmed` | Somebody joins for real | `object $subscriber` |
 | `mailhouse_subscriber_unsubscribed` | Somebody leaves | `object $subscriber, string $source` |
 | `mailhouse_subscriber_bounced` | An address is retired as undeliverable | `object $subscriber, string $reason` |
+| `mailhouse_subscriber_resubscribed` | Somebody who unsubscribed comes back from their preferences page | `object $subscriber, string $by` |
+| `mailhouse_subscriber_tags_changed` | The set of tags on a subscriber changes | `int $subscriber_id, int[] $added, int[] $removed` |
+| `mailhouse_tag_saved` | A tag is created or renamed | `object $tag` |
+| `mailhouse_tag_deleted` | A tag is deleted | `object $tag, int[] $holders` |
 | `mailhouse_webhook_event` | Any provider event, matched or not | `array $event, ?object $subscriber` |
+| `mailhouse_subscribers_deleting` | Rows are about to be deleted | `array<int,object> $rows`, keyed by id |
 | `mailhouse_subscribers_deleted` | Rows are deleted | `int[] $ids` |
 | `mailhouse_campaign_queued` | A campaign is queued | `int $campaign_id, int $queued` |
 | `mailhouse_campaign_finished` | Its last message goes out | `int $campaign_id, array $stats` |
@@ -139,6 +153,80 @@ Every timestamp is UTC. `mailhouse_date()` converts on the way out.
 | `mailhouse_webhook_events` | Normalised events parsed from a callback | `array $events, string $provider, array $payload` |
 | `mailhouse_webhook_tolerance` | Clock skew allowed on a signed callback | `int $seconds` |
 | `mailhouse_update_repo` | Repository updates are read from | `string $repo` |
+
+## Watching the list change
+
+Until 1.6.0 about half the ways a subscriber could change fired nothing: an
+administrator editing an address, somebody correcting their own name, any
+change of tags. Every write now goes through one of a few functions, and each
+of those says what it did.
+
+**`Mailhouse_Subscribers::update()`** compares what it is asked to write with
+what is stored. When one of the columns in `Mailhouse_Subscribers::SYNCED`
+actually differs — `email`, `first_name`, `last_name`, `fields`, `status`,
+`source`, `created_at`, `confirmed_at`, `unsubscribed_at` — it adds one to the
+row's `revision` and fires `mailhouse_subscriber_updated` with the row after,
+the row before, and the names of the columns that changed:
+
+```php
+add_action(
+	'mailhouse_subscriber_updated',
+	function ( $after, $before, $changed ) {
+		if ( in_array( 'email', $changed, true ) ) {
+			// $before->email became $after->email.
+		}
+	},
+	10,
+	3
+);
+```
+
+It does **not** fire for the `sent`, `opens`, `clicks` and `bounces` counters
+or for the keys, and not for a write that sets a column to the value it
+already had. `sent` moves on every campaign; a listener told about each of
+those would hear nothing else. Custom fields are compared as data, so the same
+fields in a different order are not a change.
+
+`confirm()`, `unsubscribe()` and `mark_bounced()` all write through
+`update()`, so each fires `mailhouse_subscriber_updated` first and its own
+hook after.
+
+**`revision`** is the cheap way to ask whether two copies of a row are the
+same. It moves on the changes above and on a change to the subscriber's tags,
+and on nothing else.
+
+**Tags.** `attach()`, `detach()` and `set()` work out what really changed and
+fire `mailhouse_subscriber_tags_changed` once, with the ids added and the ids
+removed. Attaching a tag somebody already has is not a change and fires
+nothing. `set()` writes only the difference — it used to remove every tag and
+add them back, which reset each `added_at` and could leave somebody with no
+tags if it stopped half-way. Deleting a tag fires `mailhouse_tag_deleted` once
+with everybody who held it, not once per holder.
+
+**Deleting.** `mailhouse_subscribers_deleting` fires before the rows go,
+carrying them. They are keyed by subscriber id rather than listed, and not
+only for convenience: `do_action()` unwraps a one-element list that holds an
+object, so a plain list would arrive as a bare row whenever exactly one
+subscriber was deleted.
+
+**Changing a status.** Two functions, for the two cases where it is not the
+subscriber's own click doing it:
+
+```php
+// An administrator's decision. Leaving the list goes through unsubscribe()
+// or mark_bounced(), so the date is recorded, queued mail is dropped and the
+// usual hooks fire. Joining it does not fire `mailhouse_subscriber_confirmed`,
+// so a correction made in the admin sends nobody a welcome email.
+Mailhouse_Subscribers::set_status( $subscriber, 'unsubscribed', 'admin' );
+
+// The owner of the address, from their own preferences page. The only thing
+// that may undo an opt-out. A bounced address cannot bring itself back.
+Mailhouse_Subscribers::resubscribe( $subscriber, 'owner' );
+```
+
+The edit form under **Subscribers** uses the first. Before 1.6.0 it wrote the
+status column directly, so an administrator unsubscribing somebody there set
+no date, cleared nothing from the queue and told nobody.
 
 ## Adding a transport
 
@@ -203,6 +291,21 @@ PHPMailer object, plus `request()` and `fail_response()`. A field named in
 automatically, and picks up `MAILHOUSE_ACME_KEY` from `wp-config.php` if it is
 defined.
 
+Two things are worth adding once it sends. Neither is required: a transport
+with neither is treated as accepting on `true` and as *ambiguous* when it
+throws.
+
+```php
+// What the provider called the message. `request()` keeps its last answer,
+// and `response_value()` / `response_header()` read from it.
+public function message_id() {
+	return $this->response_value( array( 'id' ) );
+}
+```
+
+Failures are sorted for you when they go through `request()` and `fail()` or
+`fail_response()`: see [What a send tells you](#what-a-send-tells-you).
+
 ## Bounce callbacks
 
 `?mailhouse_webhook=<provider>&k=<secret>` — a query-string endpoint rather
@@ -227,8 +330,14 @@ no bounce handling for those two. Where a key *is* set, an unsigned or badly
 signed callback is refused outright.
 
 Each provider's payload is normalised to a list of
-`array( 'email', 'type', 'reason' )`, where `type` is one of `hard`, `soft`,
-`complaint`, `unsubscribe` or `delivered`. Anything else — opens, clicks,
+`array( 'email', 'type', 'reason', 'message_id', 'event_id', 'occurred_at' )`,
+where `type` is one of `hard`, `soft`, `complaint`, `unsubscribe` or
+`delivered`. The last three say which message and which notification this
+is, where the provider says: `message_id` is the id the send call returned,
+`event_id` is the provider's own id for the callback, and `occurred_at` is a
+Unix time. They are empty or zero when the provider does not supply them.
+Nothing acts on them yet — they are carried so that a bounce can be matched
+to the message that bounced. Anything else — opens, clicks,
 deferrals, processed notices — is dropped at the parser, because acting on it
 either duplicates our own tracking or punishes an address for a condition the
 provider is still retrying.
@@ -376,6 +485,64 @@ $result = Mailhouse_Subscribers::add(
 never quietly reactivates somebody who unsubscribed — they go back through
 confirmation.
 
+### What a send tells you
+
+`Mailhouse_Mailer::send()` returns `true` when the transport took the message
+and `false` otherwise, as it always has. `false` covers two very different
+things, though: *the server said no*, and *the connection dropped and nobody
+knows*. The first is safe to try again. The second may already be in
+somebody's inbox.
+
+```php
+$sent   = Mailhouse_Mailer::send( $to, $subject, $html );
+$result = Mailhouse_Mailer::last_result();
+
+// array(
+//     'outcome'    => 'accepted' | 'rejected' | 'ambiguous',
+//     'permanent'  => bool,     // rejected only: trying again will not help
+//     'message_id' => string,   // accepted only: the transport's id, if it gave one
+//     'error'      => string,
+// )
+```
+
+The rule every transport follows: a failure is a **rejection** only when it
+can be shown the message never left. Everything else is **ambiguous**.
+
+| What happened | Outcome |
+|---|---|
+| SMTP `250` after the body; a `2xx` from an API | `accepted` |
+| The message could not be built — no valid recipient, say | `rejected`, permanent |
+| API `4xx`; a refusal inside a `200`; SMTP `5xx` | `rejected`, permanent |
+| API `408`, `425`, `429`, `503`; SMTP `4xx`; could not connect, resolve or authenticate | `rejected`, worth retrying |
+| Any other API `5xx`; a timeout or reset after the request was written; the line going dead after an SMTP body was sent | `ambiguous` |
+
+The queue records `message_id` on the row it sent (`provider_message_id`).
+What it does with a failure has not changed: it retries, up to three times.
+
+`'no_fallback' => true` keeps the backup transport out of one message. Sending
+again through a second route after an unclear failure on the first is how one
+person gets two copies; pass it wherever that matters more than getting the
+message out.
+
+### How the queue takes its work
+
+`Mailhouse_Queue::claim( $limit )` takes rows with one `UPDATE` that marks
+them `sending` and stamps them with a token, then reads back the rows carrying
+that token. The database guarantees two runs arriving together come away with
+different rows. Before 1.6.0 the rows were read and nothing was marked; only a
+transient stood between two runs and the same batch, and a transient is a
+check followed by a write with a gap between them.
+
+It also means a row says `sending` *before* anything is handed to a transport.
+A run that dies part-way leaves rows that say so; `reap_stale()` returns them
+to `pending` after ten minutes, which is what became of them before claims
+existed. Rows a batch claimed and did not reach inside its time budget are
+handed straight back by `release()`.
+
+The transient is still there. It keeps the pace to one batch a minute, which
+is what "emails per minute" in the settings promises; it is no longer what
+stops a message going twice.
+
 ## Updates
 
 Mailhouse is not on the wordpress.org directory, so it answers for its own
@@ -473,7 +640,7 @@ could only ever build tags new enough to contain it.
 
 ## Tests
 
-Seven scripts under `tests/`, run against a real WordPress rather than mocks —
+Eight scripts under `tests/`, run against a real WordPress rather than mocks —
 the things worth checking here are `dbDelta` actually creating the tables, a
 rewrite rule actually matching, and PHPMailer actually assembling a message,
 all of which a mock would get wrong.
@@ -486,7 +653,15 @@ php tests/test-features.php  # transports, design, digests
 php tests/test-webhooks.php  # bounce parsing and signature verification
 php tests/test-branding.php  # theme colours, the design, the popup
 php tests/test-updates.php   # the update check, start to finish
+php tests/test-foundations.php  # change hooks, revisions, the queue claim, send results
 ```
+
+`test-foundations.php` includes a race: two PHP processes started on the same
+tick, each claiming rows seven at a time out of five hundred until none are
+left. It asserts no row was claimed twice and none was missed. Five rounds by
+default; `MAILHOUSE_CLAIM_ROUNDS=50` for a longer look. The same race run
+against a read-then-mark claim loses rows to both processes within a round or
+two, which is how the test is known to be able to fail.
 
 `test-updates.php` stands in for GitHub with `pre_http_request` rather than
 calling it, so the shapes worth worrying about — a release with no zip, a
