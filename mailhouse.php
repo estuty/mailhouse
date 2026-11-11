@@ -3,7 +3,7 @@
  * Plugin Name:       Mailhouse
  * Plugin URI:        https://github.com/estuty/mailhouse
  * Description:       One plugin for the whole mail path: reliable delivery over SMTP or a mail API with a searchable log, plus a self-hosted newsletter -- opt-in forms, double opt-in, tags, broadcasts and automations. Replaces a separate SMTP plugin and a separate newsletter plugin.
- * Version:           1.5.0
+ * Version:           1.6.0
  * Update URI:        https://github.com/estuty/mailhouse
  * Requires at least: 6.0
  * Requires PHP:      7.4
@@ -18,7 +18,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MAILHOUSE_VERSION', '1.5.0' );
+define( 'MAILHOUSE_VERSION', '1.6.0' );
 define( 'MAILHOUSE_FILE', __FILE__ );
 define( 'MAILHOUSE_PATH', plugin_dir_path( __FILE__ ) );
 define( 'MAILHOUSE_URL', plugin_dir_url( __FILE__ ) );
@@ -110,6 +110,12 @@ function mailhouse_deactivate() {
 	wp_clear_scheduled_hook( 'mailhouse_process_queue' );
 	wp_clear_scheduled_hook( 'mailhouse_daily_maintenance' );
 	wp_clear_scheduled_hook( 'mailhouse_post_digest' );
+
+	// Nothing will be sending from here on, so no claim on a queued message
+	// can still be live. Handing them back means an older version installed
+	// over this one finds every unsent row where it expects it.
+	Mailhouse_Queue::release();
+
 	flush_rewrite_rules();
 }
 register_deactivation_hook( __FILE__, 'mailhouse_deactivate' );

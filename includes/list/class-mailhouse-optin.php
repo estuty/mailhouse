@@ -301,18 +301,7 @@ class Mailhouse_Optin {
 			Mailhouse_Tags::set( (int) $subscriber->id, array_merge( $private, $allowed ) );
 
 			if ( 'unsubscribed' === $subscriber->status && ! empty( $_POST['resubscribe'] ) ) {
-				Mailhouse_Subscribers::update(
-					(int) $subscriber->id,
-					array(
-						'status'       => 'subscribed',
-						'confirmed_at' => mailhouse_now(),
-						// Spend the confirmation key here too. Left alive on a
-						// subscribed row, the link in the original signup
-						// email stays replayable -- and replaying it after a
-						// later unsubscribe would put them back on the list.
-						'confirm_key'  => null,
-					)
-				);
+				Mailhouse_Subscribers::resubscribe( $subscriber, 'owner' );
 			}
 
 			$subscriber = Mailhouse_Subscribers::get( (int) $subscriber->id );

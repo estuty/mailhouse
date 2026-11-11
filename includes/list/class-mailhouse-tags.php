@@ -120,7 +120,18 @@ class Mailhouse_Tags {
 			)
 		);
 
-		return (int) $wpdb->insert_id;
+		$id = (int) $wpdb->insert_id;
+
+		if ( $id ) {
+			/**
+			 * Fires when a tag is created or renamed.
+			 *
+			 * @param object $tag Tag row.
+			 */
+			do_action( 'mailhouse_tag_saved', self::get( $id ) );
+		}
+
+		return $id;
 	}
 
 	/**
@@ -141,7 +152,7 @@ class Mailhouse_Tags {
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		return false !== $wpdb->update(
+		$updated = $wpdb->update(
 			self::table(),
 			array(
 				'name'        => $name,
@@ -150,6 +161,13 @@ class Mailhouse_Tags {
 			),
 			array( 'id' => (int) $id )
 		);
+
+		if ( $updated ) {
+			/** This action is documented in includes/list/class-mailhouse-tags.php */
+			do_action( 'mailhouse_tag_saved', self::get( (int) $id ) );
+		}
+
+		return false !== $updated;
 	}
 
 	/**
@@ -161,12 +179,37 @@ class Mailhouse_Tags {
 	public static function delete( $id ) {
 		global $wpdb;
 
-		$id = (int) $id;
+		$id  = (int) $id;
+		$tag = self::get( $id );
+
+		if ( ! $tag ) {
+			return;
+		}
+
+		$pivot = self::pivot();
+
+		// Everybody holding the tag is about to hold one fewer, which is a
+		// change to them as much as to the tag.
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$holders = array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT subscriber_id FROM {$pivot} WHERE tag_id = %d ORDER BY subscriber_id ASC", $id ) ) );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$wpdb->delete( self::pivot(), array( 'tag_id' => $id ) );
+		$wpdb->delete( $pivot, array( 'tag_id' => $id ) );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$wpdb->delete( self::table(), array( 'id' => $id ) );
+
+		Mailhouse_Subscribers::bump_revision( $holders );
+
+		/**
+		 * Fires when a tag is deleted.
+		 *
+		 * One call for the tag, not one per subscriber: a tag held by ten
+		 * thousand people would otherwise fire ten thousand times.
+		 *
+		 * @param object $tag     The tag as it was.
+		 * @param int[]  $holders Ids of the subscribers who had it.
+		 */
+		do_action( 'mailhouse_tag_deleted', $tag, $holders );
 	}
 
 	/**
@@ -227,20 +270,7 @@ class Mailhouse_Tags {
 	 * @return void
 	 */
 	public static function attach( $subscriber_id, $tag_ids ) {
-		global $wpdb;
-
-		foreach ( array_filter( array_map( 'absint', (array) $tag_ids ) ) as $tag_id ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->query(
-				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					'INSERT IGNORE INTO ' . self::pivot() . ' (subscriber_id, tag_id, added_at) VALUES (%d, %d, %s)',
-					(int) $subscriber_id,
-					$tag_id,
-					mailhouse_now()
-				)
-			);
-		}
+		self::change( $subscriber_id, (array) $tag_ids, array() );
 	}
 
 	/**
@@ -251,39 +281,112 @@ class Mailhouse_Tags {
 	 * @return void
 	 */
 	public static function detach( $subscriber_id, $tag_ids = array() ) {
-		global $wpdb;
+		$tag_ids = array_filter( array_map( 'absint', (array) $tag_ids ) );
 
-		$pivot         = self::pivot();
-		$subscriber_id = (int) $subscriber_id;
-		$tag_ids       = array_filter( array_map( 'absint', (array) $tag_ids ) );
-
-		if ( ! $tag_ids ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-			$wpdb->delete( $pivot, array( 'subscriber_id' => $subscriber_id ) );
-			return;
-		}
-
-		$placeholders = implode( ',', array_fill( 0, count( $tag_ids ), '%d' ) );
-
-		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		$wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$pivot} WHERE subscriber_id = %d AND tag_id IN ({$placeholders})",
-				array_merge( array( $subscriber_id ), $tag_ids )
-			)
-		);
+		self::change( $subscriber_id, array(), $tag_ids ? $tag_ids : self::ids_for( $subscriber_id ) );
 	}
 
 	/**
 	 * Replace a subscriber's tags with exactly this set.
+	 *
+	 * Only the difference is written. A tag that stays keeps the date it was
+	 * added on, and a failure part-way cannot leave somebody with no tags at
+	 * all -- which is what removing everything and adding it back risked.
 	 *
 	 * @param int   $subscriber_id Subscriber id.
 	 * @param array $tag_ids       Tag ids.
 	 * @return void
 	 */
 	public static function set( $subscriber_id, $tag_ids ) {
-		self::detach( $subscriber_id );
-		self::attach( $subscriber_id, $tag_ids );
+		$wanted  = array_values( array_unique( array_filter( array_map( 'absint', (array) $tag_ids ) ) ) );
+		$current = self::ids_for( $subscriber_id );
+
+		self::change( $subscriber_id, array_diff( $wanted, $current ), array_diff( $current, $wanted ) );
+	}
+
+	/**
+	 * The ids of the tags on a subscriber.
+	 *
+	 * @param int $subscriber_id Subscriber id.
+	 * @return int[]
+	 */
+	public static function ids_for( $subscriber_id ) {
+		global $wpdb;
+
+		$pivot = self::pivot();
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT tag_id FROM {$pivot} WHERE subscriber_id = %d ORDER BY tag_id ASC", (int) $subscriber_id ) ) );
+	}
+
+	/**
+	 * Add and remove tags, and say so once if anything actually changed.
+	 *
+	 * Every write to a subscriber's tags comes through here, so there is one
+	 * place that knows what the difference was.
+	 *
+	 * @param int   $subscriber_id Subscriber id.
+	 * @param array $add           Tag ids to attach.
+	 * @param array $remove        Tag ids to detach.
+	 * @return void
+	 */
+	protected static function change( $subscriber_id, $add, $remove ) {
+		global $wpdb;
+
+		$pivot         = self::pivot();
+		$subscriber_id = (int) $subscriber_id;
+		$current       = self::ids_for( $subscriber_id );
+
+		$add    = array_values( array_diff( array_unique( array_filter( array_map( 'absint', (array) $add ) ) ), $current ) );
+		$remove = array_values( array_intersect( array_unique( array_filter( array_map( 'absint', (array) $remove ) ) ), $current ) );
+		$added  = array();
+
+		foreach ( $add as $tag_id ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$inserted = $wpdb->query(
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					"INSERT IGNORE INTO {$pivot} (subscriber_id, tag_id, added_at) VALUES (%d, %d, %s)",
+					$subscriber_id,
+					$tag_id,
+					mailhouse_now()
+				)
+			);
+
+			// Zero when another request attached it in the meantime.
+			if ( $inserted ) {
+				$added[] = (int) $tag_id;
+			}
+		}
+
+		if ( $remove ) {
+			$placeholders = implode( ',', array_fill( 0, count( $remove ), '%d' ) );
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$pivot} WHERE subscriber_id = %d AND tag_id IN ({$placeholders})",
+					array_merge( array( $subscriber_id ), $remove )
+				)
+			);
+		}
+
+		if ( ! $added && ! $remove ) {
+			return;
+		}
+
+		$remove = array_map( 'intval', $remove );
+
+		Mailhouse_Subscribers::bump_revision( array( $subscriber_id ) );
+
+		/**
+		 * Fires when the set of tags on a subscriber changes.
+		 *
+		 * @param int   $subscriber_id Subscriber id.
+		 * @param int[] $added         Tag ids attached.
+		 * @param int[] $remove        Tag ids detached.
+		 */
+		do_action( 'mailhouse_subscriber_tags_changed', $subscriber_id, $added, $remove );
 	}
 
 	/**

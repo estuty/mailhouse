@@ -159,9 +159,14 @@ class Mailhouse_Merge_Tags {
 			$values['confirmation_url'] = Mailhouse_Optin::confirm_url( $subscriber );
 			$values['confirm_button']   = self::button( $values['confirmation_url'], __( 'Confirm my subscription', 'mailhouse' ) );
 
+			// A custom field never replaces a built-in tag. One called
+			// `unsubscribe_url` would otherwise swap the real link for
+			// whatever the field held.
 			foreach ( Mailhouse_Subscribers::fields( $subscriber ) as $key => $value ) {
-				if ( is_scalar( $value ) ) {
-					$values[ strtolower( (string) $key ) ] = (string) $value;
+				$key = strtolower( (string) $key );
+
+				if ( is_scalar( $value ) && ! array_key_exists( $key, $values ) ) {
+					$values[ $key ] = (string) $value;
 				}
 			}
 		}
