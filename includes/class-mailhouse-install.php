@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.2.0';
+	const DB_VERSION = '1.3.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -209,6 +209,25 @@ class Mailhouse_Install {
 			) {$collate};"
 		);
 
+		// What has changed on this site and not yet been told to a Mailhouse
+		// Central installation. Empty, and never written to, on a site that
+		// is not connected to one.
+		$outbox = self::table( 'outbox' );
+		dbDelta(
+			"CREATE TABLE {$outbox} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				event_id char(36) NOT NULL,
+				type varchar(40) NOT NULL,
+				subject_type varchar(12) NOT NULL DEFAULT 'subscriber',
+				subject_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				origin varchar(48) NOT NULL DEFAULT 'local',
+				payload longtext NOT NULL,
+				occurred_at datetime NOT NULL,
+				PRIMARY KEY  (id),
+				KEY occurred_at (occurred_at)
+			) {$collate};"
+		);
+
 		self::seed_defaults();
 
 		// Added in 1.1.0, so it runs on upgrades too, not just new installs.
@@ -265,7 +284,7 @@ class Mailhouse_Install {
 	public static function drop_tables() {
 		global $wpdb;
 
-		foreach ( array( 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
+		foreach ( array( 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
 			$table = self::table( $name );
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery

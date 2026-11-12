@@ -224,7 +224,7 @@ class Mailhouse_Optin {
 		}
 
 		if ( $one_click ) {
-			Mailhouse_Subscribers::unsubscribe( $subscriber );
+			Mailhouse_Subscribers::unsubscribe( $subscriber, 'one_click' );
 			status_header( 200 );
 			header( 'Content-Type: text/plain; charset=utf-8' );
 			echo "Unsubscribed\n";
@@ -248,7 +248,7 @@ class Mailhouse_Optin {
 			);
 		}
 
-		Mailhouse_Subscribers::unsubscribe( $subscriber );
+		Mailhouse_Subscribers::unsubscribe( $subscriber, 'link' );
 
 		self::render(
 			__( 'You have been unsubscribed', 'mailhouse' ),

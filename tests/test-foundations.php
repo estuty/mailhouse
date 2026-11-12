@@ -78,9 +78,9 @@ foreach (
 		'mailhouse_subscriber_updated'      => 3,
 		'mailhouse_subscriber_confirmed'    => 1,
 		'mailhouse_subscriber_unsubscribed' => 2,
-		'mailhouse_subscriber_bounced'      => 2,
+		'mailhouse_subscriber_bounced'      => 3,
 		'mailhouse_subscriber_resubscribed' => 2,
-		'mailhouse_subscribers_deleting'    => 1,
+		'mailhouse_subscribers_deleting'    => 2,
 		'mailhouse_subscribers_deleted'     => 1,
 		'mailhouse_subscriber_tags_changed' => 3,
 		'mailhouse_tag_saved'               => 1,
@@ -148,7 +148,7 @@ Mailhouse_Settings::set(
 
 echo "== Schema ==\n";
 
-check( 'schema version is 1.2.0', '1.2.0' === Mailhouse_Install::DB_VERSION && '1.2.0' === get_option( 'mailhouse_db_version' ), (string) get_option( 'mailhouse_db_version' ) );
+check( 'schema version is 1.3.0', '1.3.0' === Mailhouse_Install::DB_VERSION && '1.3.0' === get_option( 'mailhouse_db_version' ), (string) get_option( 'mailhouse_db_version' ) );
 check( 'subscribers have a revision', mhf_has_column( 'subscribers', 'revision' ) );
 
 foreach ( array( 'claim_token', 'claimed_at', 'provider_message_id', 'remote_job_id', 'reported' ) as $column ) {
@@ -178,7 +178,7 @@ check( 'a second request stands back while one is upgrading', ! mhf_has_column( 
 update_option( 'mailhouse_install_lock', time() - 600, false );
 Mailhouse_Install::maybe_install();
 check( 'a stale lock does not block the upgrade for ever', mhf_has_column( 'subscribers', 'revision' ) );
-check( 'the version is recorded', '1.2.0' === get_option( 'mailhouse_db_version' ) );
+check( 'the version is recorded', '1.3.0' === get_option( 'mailhouse_db_version' ) );
 check( 'the lock is released', false === get_option( 'mailhouse_install_lock' ) );
 
 echo "\n== Changes to a subscriber are observable ==\n";
@@ -399,6 +399,16 @@ $calls = mhf_calls( 'mailhouse_subscribers_deleting' );
 check( 'deleting fires before the rows go, with the rows keyed by id', 1 === count( $calls ) && is_array( $calls[0]['args'][0] ) && $email3 === $calls[0]['args'][0][ (int) $row['id'] ]->email );
 check( 'and the original hook still fires after', 'mailhouse_subscribers_deleted' === $fired[ count( $fired ) - 1 ]['hook'] );
 check( 'in that order', 'mailhouse_subscribers_deleting' === $fired[0]['hook'] );
+check( 'and it says why: an administrator, unless told otherwise', 'admin' === $calls[0]['args'][1] );
+
+$erased = Mailhouse_Subscribers::add( array( 'email' => mhf_address( 'erased' ), 'status' => 'subscribed', 'send_emails' => false ) );
+$gone   = Mailhouse_Subscribers::get( (int) $erased['id'] );
+
+mhf_reset();
+Mailhouse_Subscribers::erase_personal_data( $gone->email );
+
+$calls = mhf_calls( 'mailhouse_subscribers_deleting' );
+check( 'the privacy eraser says it is an erasure', 1 === count( $calls ) && 'erasure' === $calls[0]['args'][1] && null === Mailhouse_Subscribers::get( (int) $erased['id'] ) );
 
 echo "\n== Built-in merge tags cannot be shadowed ==\n";
 

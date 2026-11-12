@@ -38,6 +38,14 @@ class Mailhouse_Central {
 	const MIN_INTERVAL = 45;
 
 	/**
+	 * Why changes are being made right now: `local`, or `command:<id>`
+	 * while something the centre asked for is being done.
+	 *
+	 * @var string
+	 */
+	protected static $origin = 'local';
+
+	/**
 	 * Register the hooks.
 	 */
 	public function __construct() {
@@ -51,9 +59,61 @@ class Mailhouse_Central {
 			return;
 		}
 
+		// From here on, what changes on this site is written down for the centre.
+		Mailhouse_Central_Outbox::listen();
+
 		// Before the queue (priority 10), so that what the centre says is
 		// known before anything is sent.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'tick' ), 5 );
+
+		// And after it, so that this site's own mail never waits on telling
+		// the centre what has changed.
+		add_action( 'mailhouse_process_queue', array( __CLASS__, 'push' ), 20 );
+	}
+
+	/**
+	 * Why changes are being made right now.
+	 *
+	 * @return string `local`, or `command:<id>`.
+	 */
+	public static function origin() {
+		return self::$origin;
+	}
+
+	/**
+	 * Do something because the centre asked for it.
+	 *
+	 * Every change recorded while the callback runs is marked as the
+	 * command's doing, which is how the centre tells its own instruction
+	 * coming back from something a person did on the site.
+	 *
+	 * @param string   $command_id The command's id.
+	 * @param callable $callback   What to do.
+	 * @return mixed Whatever the callback returns.
+	 */
+	public static function with_origin( $command_id, $callback ) {
+		$before       = self::$origin;
+		$command_id   = strtolower( (string) $command_id );
+		self::$origin = preg_match( '/^[0-9a-f-]{36}$/', $command_id ) ? 'command:' . $command_id : 'local';
+
+		try {
+			return call_user_func( $callback );
+		} finally {
+			self::$origin = $before;
+		}
+	}
+
+	/**
+	 * The part of a scheduled run that sends the outbox.
+	 *
+	 * @return void
+	 */
+	public static function push() {
+		if ( self::disabled() ) {
+			return;
+		}
+
+		Mailhouse_Central_Sync::push();
 	}
 
 	/**
@@ -128,6 +188,10 @@ class Mailhouse_Central {
 						'centre_status'     => isset( $body['status'] ) && 'paused' === $body['status'] ? 'paused' : 'connected',
 						'suspended_reason'  => '',
 						'last_heartbeat_at' => $now,
+						// The centre moves a website to a new epoch when its
+						// sequence has to start again; events are sent under
+						// whichever it says.
+						'epoch'             => isset( $body['epoch'] ) && (int) $body['epoch'] >= 1 ? (int) $body['epoch'] : max( 1, (int) Mailhouse_Central_Identity::get( 'epoch' ) ),
 						'clock_offset'      => Mailhouse_Central_Client::offset_from( $body ),
 						'last_error'        => '',
 						'failures'          => 0,

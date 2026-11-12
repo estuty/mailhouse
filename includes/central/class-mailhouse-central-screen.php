@@ -257,9 +257,27 @@ class Mailhouse_Central_Screen {
 
 		$result = Mailhouse_Central::heartbeat();
 
+		if ( is_wp_error( $result ) ) {
+			$this->finish( 'error', $result->get_error_message() );
+		}
+
+		// Asked for by a person, so sent now rather than when the last
+		// failure said to try again.
+		Mailhouse_Central_Identity::update( array( 'push_next_at' => 0 ) );
+
+		$push = Mailhouse_Central_Sync::push();
+
+		if ( '' !== $push['error'] ) {
+			/* translators: %s: what went wrong. */
+			$this->finish( 'error', sprintf( __( 'The centre answered, but would not take this site’s changes: %s', 'mailhouse' ), $push['error'] ) );
+		}
+
 		$this->finish(
-			is_wp_error( $result ) ? 'error' : 'success',
-			is_wp_error( $result ) ? $result->get_error_message() : __( 'The centre answered. This site is connected.', 'mailhouse' )
+			'success',
+			$push['sent'] > 0
+				/* translators: %d: number of changes. */
+				? sprintf( _n( 'The centre answered, and was sent %d change.', 'The centre answered, and was sent %d changes.', $push['sent'], 'mailhouse' ), $push['sent'] )
+				: __( 'The centre answered. This site is connected.', 'mailhouse' )
 		);
 	}
 
@@ -435,12 +453,34 @@ class Mailhouse_Central_Screen {
 			);
 		}
 
+		if ( '' !== $state['push_error'] ) {
+			printf(
+				'<div class="notice notice-error inline"><p>%s %s</p></div>',
+				esc_html__( 'The last attempt to send this site’s changes failed:', 'mailhouse' ),
+				esc_html( $state['push_error'] )
+			);
+		}
+
+		if ( '' !== $state['needs_reconcile'] ) {
+			printf(
+				'<div class="notice notice-warning inline"><p>%s</p></div>',
+				esc_html__( 'Some of this site’s changes did not reach the centre one by one. Nothing is lost here: the centre’s copy is brought up to date the next time the two are compared.', 'mailhouse' )
+			);
+		}
+
+		$waiting = Mailhouse_Central_Outbox::waiting();
+
 		$rows = array(
 			__( 'Central address', 'mailhouse' )        => $state['central_url'],
 			__( 'This website’s id there', 'mailhouse' ) => $state['website_id'],
 			__( 'Registered as', 'mailhouse' )          => $state['registered_url'],
 			__( 'Connected', 'mailhouse' )              => $this->when( $state['registered_at'] ),
 			__( 'Last report accepted', 'mailhouse' )   => $this->when( $state['last_heartbeat_at'] ),
+			__( 'Changes waiting to be sent', 'mailhouse' ) => 0 === $waiting['depth']
+				? __( 'none', 'mailhouse' )
+				/* translators: 1: number of changes, 2: a length of time ago. */
+				: sprintf( __( '%1$s, the oldest from %2$s', 'mailhouse' ), number_format_i18n( $waiting['depth'] ), $this->when( strtotime( $waiting['oldest'] . ' UTC' ) ) ),
+			__( 'Changes last sent', 'mailhouse' )      => $this->when( $state['last_push_at'] ),
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);

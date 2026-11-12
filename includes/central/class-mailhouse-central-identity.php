@@ -85,6 +85,18 @@ class Mailhouse_Central_Identity {
 			'last_error'        => '',
 			'failures'          => 0,
 			'next_attempt_at'   => 0,
+			// The outbox. Which run of the sequence events belong to, what
+			// to add to a row's id to get its sequence number, and the id of
+			// the last row the centre has confirmed it holds.
+			'epoch'             => 1,
+			'seq_offset'        => 0,
+			'outbox_acked'      => 0,
+			'last_push_at'      => 0,
+			'push_failures'     => 0,
+			'push_next_at'      => 0,
+			'push_error'        => '',
+			// Why the two copies need comparing, when this site knows they do.
+			'needs_reconcile'   => '',
 		);
 	}
 
@@ -235,7 +247,7 @@ class Mailhouse_Central_Identity {
 
 		$engine = 'InnoDB';
 
-		foreach ( array( 'subscribers', 'tags', 'subscriber_tags', 'queue', 'log' ) as $name ) {
+		foreach ( array( 'subscribers', 'tags', 'subscriber_tags', 'queue', 'log', 'outbox' ) as $name ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$row = $wpdb->get_row( $wpdb->prepare( 'SHOW TABLE STATUS LIKE %s', $wpdb->esc_like( Mailhouse_Install::table( $name ) ) ) );
 
@@ -359,9 +371,14 @@ class Mailhouse_Central_Identity {
 					'protocol'       => $accepted['protocol'],
 					'registered_at'  => time(),
 					'clock_offset'   => Mailhouse_Central_Client::offset_from( $answer['body'] ),
-				)
+				),
+				Mailhouse_Central_Sync::begin( $accepted['last_seq_received'], $accepted['epoch'] )
 			)
 		);
+
+		// Registered in the middle of a request: start listening now, not
+		// on the next one.
+		Mailhouse_Central_Outbox::listen();
 
 		return true;
 	}
@@ -405,10 +422,16 @@ class Mailhouse_Central_Identity {
 			);
 		}
 
+		// Where the centre's count of this website's events stands. Absent
+		// from a centre older than synchronisation, which has none.
+		$sync = isset( $body['sync'] ) && is_array( $body['sync'] ) ? $body['sync'] : array();
+
 		return array(
-			'website_id'    => (string) $body['website_id'],
-			'platform_keys' => $keys,
-			'protocol'      => (int) $body['protocol'],
+			'website_id'        => (string) $body['website_id'],
+			'platform_keys'     => $keys,
+			'protocol'          => (int) $body['protocol'],
+			'epoch'             => isset( $sync['epoch'] ) ? max( 1, (int) $sync['epoch'] ) : 1,
+			'last_seq_received' => isset( $sync['last_seq_received'] ) ? max( 0, (int) $sync['last_seq_received'] ) : 0,
 		);
 	}
 
@@ -527,6 +550,11 @@ class Mailhouse_Central_Identity {
 
 		delete_option( self::OPTION );
 		self::$state = null;
+
+		// What was waiting to be sent belonged to this connection. The
+		// newest row stays, so that the table never counts from one again.
+		Mailhouse_Central_Outbox::forget( Mailhouse_Central_Outbox::highest() );
+		Mailhouse_Central_Outbox::reset();
 
 		return $told;
 	}

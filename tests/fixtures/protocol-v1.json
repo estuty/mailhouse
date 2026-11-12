@@ -695,6 +695,360 @@
       "proof": "4sxYf0RKJia7aMNZpedl1OQBFqEtA2Cw5bu86MQP44Jo4lW8iJkdGBFAaudelO7B0dgcmX8KwlVNgv+xIsELAQ=="
     }
   ],
+  "states": [
+    {
+      "name": "a subscriber with everything set",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "canonical": "MH1-STATE\nlocal_id=5521\nemail=jane%40example.com\nfirst_name=Jane\nlast_name=Doe\nfields=company=Acme&size=10\nstatus=unsubscribed\nsource=form\nsignup_ip=203.0.113.9\ncreated_at=2025-03-02T10:11:12Z\nconfirmed_at=2025-03-02T10:14:40Z\nunsubscribed_at=2026-11-12T09:29:51Z\ntags=3,9\nrevision=8",
+      "hash": "9166544f2031145b29ac5879222cbc046f420f66fedc17bcbc83fbdba8a73b83"
+    },
+    {
+      "name": "the least a subscriber can be",
+      "state": {
+        "local_id": 1,
+        "email": "a@b.co",
+        "first_name": "",
+        "last_name": "",
+        "fields": {},
+        "status": "pending",
+        "source": "",
+        "signup_ip": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "confirmed_at": null,
+        "unsubscribed_at": null,
+        "tags": [],
+        "revision": 0
+      },
+      "canonical": "MH1-STATE\nlocal_id=1\nemail=a%40b.co\nfirst_name=\nlast_name=\nfields=\nstatus=pending\nsource=\nsignup_ip=\ncreated_at=2026-01-01T00:00:00Z\nconfirmed_at=\nunsubscribed_at=\ntags=\nrevision=0",
+      "hash": "2ad398c59fe61160c7db36f324f3c384afbd288e31fca19ce71d956a1d08423e"
+    },
+    {
+      "name": "names and fields that need encoding, fields and tags given out of order",
+      "state": {
+        "local_id": 42,
+        "email": "zoë+news@bücher.example",
+        "first_name": "Zoë",
+        "last_name": "O’Brien & Søn",
+        "fields": {
+          "town": "São Paulo",
+          "a-b": "x=y&z",
+          "note": "line one\nline two",
+          "city": "日本"
+        },
+        "status": "subscribed",
+        "source": "csv import",
+        "signup_ip": "2001:db8::1",
+        "created_at": "2024-02-29T23:59:59Z",
+        "confirmed_at": "2024-03-01T00:00:00Z",
+        "unsubscribed_at": null,
+        "tags": [
+          10,
+          2,
+          33,
+          1
+        ],
+        "revision": 2147483647
+      },
+      "canonical": "MH1-STATE\nlocal_id=42\nemail=zo%C3%AB%2Bnews%40b%C3%BCcher.example\nfirst_name=Zo%C3%AB\nlast_name=O%E2%80%99Brien%20%26%20S%C3%B8n\nfields=a-b=x%3Dy%26z&city=%E6%97%A5%E6%9C%AC&note=line%20one%0Aline%20two&town=S%C3%A3o%20Paulo\nstatus=subscribed\nsource=csv%20import\nsignup_ip=2001%3Adb8%3A%3A1\ncreated_at=2024-02-29T23:59:59Z\nconfirmed_at=2024-03-01T00:00:00Z\nunsubscribed_at=\ntags=1,2,10,33\nrevision=2147483647",
+      "hash": "51b5d9935df77f84782329595cb50350dcb068fda221a80e882333fa6b4b480a"
+    },
+    {
+      "name": "a field with an empty value, and a bounced subscriber",
+      "state": {
+        "local_id": 9007199254740991,
+        "email": "bounce@example.org",
+        "first_name": " padded ",
+        "last_name": "",
+        "fields": {
+          "empty": ""
+        },
+        "status": "bounced",
+        "source": "registration",
+        "signup_ip": "198.51.100.7",
+        "created_at": "2026-11-12T09:30:00Z",
+        "confirmed_at": null,
+        "unsubscribed_at": null,
+        "tags": [
+          7
+        ],
+        "revision": 3
+      },
+      "canonical": "MH1-STATE\nlocal_id=9007199254740991\nemail=bounce%40example.org\nfirst_name=%20padded%20\nlast_name=\nfields=empty=\nstatus=bounced\nsource=registration\nsignup_ip=198.51.100.7\ncreated_at=2026-11-12T09:30:00Z\nconfirmed_at=\nunsubscribed_at=\ntags=7\nrevision=3",
+      "hash": "21988029f7f888b6fe4a84cc60de57cb4e908047cf70ae84c1f20c97290e1913"
+    }
+  ],
+  "changed_states": [
+    {
+      "name": "changed: the address",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.org",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "f74be2c13ee17d746a873fc572f5f5a9b34fb2d315f99dc232da60eb9a9fb1eb"
+    },
+    {
+      "name": "changed: a name",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Janet",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "e0254ff336b0d4b00016715261cebcf22b2f43f7932a5a29bebbbfc02a5cbf6d"
+    },
+    {
+      "name": "changed: a field’s value",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme Ltd",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "9c51a6ed42bd552c2c40dba6b8e23ffb74fc4b6f4e78cf2d203423d42c2466bb"
+    },
+    {
+      "name": "changed: a field removed",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "25fc2ba4048be444cb32afc1bc300ebc4a33a131d7d55f8fbc43c44b1ead9351"
+    },
+    {
+      "name": "changed: the status",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "subscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "0074658c4f8c2b8a80d7f8c257b314187ab3ca275c4fec79cbc8d3d5c63b8a97"
+    },
+    {
+      "name": "changed: a date",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:52Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "ea34b465ae2932b88b054a5df6366546839d826a01c59297144b03f1812f6a53"
+    },
+    {
+      "name": "changed: a date removed",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": null,
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "6a9f11e2daafe814db2469eaa03ae4b849ee0d164ccdb6472b0b8458bdf3b600"
+    },
+    {
+      "name": "changed: a tag added",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9,
+          12
+        ],
+        "revision": 8
+      },
+      "hash": "8769a80d6a07f6f237d8ee4f98b244cc898ed7e41fdf69426075355f32573480"
+    },
+    {
+      "name": "changed: the revision",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": "203.0.113.9",
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 9
+      },
+      "hash": "005c11aa5a8afb571b74febee5b2d6047878afd4913cea54b7cf28b3d53df390"
+    },
+    {
+      "name": "changed: the signup address",
+      "state": {
+        "local_id": 5521,
+        "email": "jane@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "fields": {
+          "company": "Acme",
+          "size": "10"
+        },
+        "status": "unsubscribed",
+        "source": "form",
+        "signup_ip": null,
+        "created_at": "2025-03-02T10:11:12Z",
+        "confirmed_at": "2025-03-02T10:14:40Z",
+        "unsubscribed_at": "2026-11-12T09:29:51Z",
+        "tags": [
+          3,
+          9
+        ],
+        "revision": 8
+      },
+      "hash": "132c7d083a2a4215770414f9b8d7db8a25391b6cebeb0ba03c183458890477b9"
+    }
+  ],
   "commands": [
     {
       "name": "a command with a payload",

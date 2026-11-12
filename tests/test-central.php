@@ -725,6 +725,7 @@ if ( is_array( $report ) ) {
 	check( 'the connection is still stored: the switch does not disconnect', 'connected' === $report['status'] );
 	check( 'the tick is not hooked', false === $report['hooked'] );
 	check( 'a tick, a queue run, a heartbeat and a signed request send nothing', 0 === $report['requests'] );
+	check( 'a change to the list is not written down for the centre, and nothing is pushed', 0 === $report['captured'] && 0 === $report['pushed'] );
 	check( 'registering and reporting in are refused', 'mailhouse_central_disabled' === $report['register'] && 'mailhouse_central_disabled' === $report['heartbeat'] );
 	check( 'and nothing about the connection is changed', get_option( 'mailhouse_central' ) === $before );
 }

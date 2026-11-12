@@ -75,7 +75,8 @@ class Mailhouse_Central_Client {
 			return new WP_Error( 'mailhouse_central_disabled', __( 'The connector is switched off.', 'mailhouse' ) );
 		}
 
-		$json    = null === $body ? '' : wp_json_encode( $body );
+		// A string is a body already encoded, and is sent as it is.
+		$json    = null === $body ? '' : ( is_string( $body ) ? $body : wp_json_encode( $body ) );
 		$headers = array(
 			'Accept'                                  => 'application/json',
 			Mailhouse_Central_Protocol::HEADER_PROTOCOL => (string) Mailhouse_Central_Protocol::VERSION,

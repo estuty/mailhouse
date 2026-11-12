@@ -106,15 +106,28 @@ you.
   the database and never leaves the site, or can be supplied as
   `MAILHOUSE_CENTRAL_PRIVATE_KEY` in `wp-config.php`.
 - It reports in once a minute: versions, counts, and which mail transport
-  is in use. Never an address, a host name or a credential.
+  is in use. Never a host name or a credential.
+- What changes on the list — a sign-up, a confirmation, an unsubscribe, a
+  bounce, a change of name, address or tags, a deletion — is written to an
+  outbox table as it happens and sent to the centre on the next scheduled
+  run, after the site's own mail has gone. A visitor's request never waits
+  on the centre. What is sent is the subscriber's address, name, custom
+  fields, status, dates, source, sign-up IP address and tags; never their
+  `manage_key` or `confirm_key`, their WordPress user id, or anything about
+  how the site sends mail.
+- If the centre cannot be reached the changes wait, and are sent in order
+  when it can. After thirty days, or a hundred thousand of them, they are
+  dropped and the two copies are compared instead; no subscriber is touched
+  by that.
 - The site keeps working by itself whether or not the centre can be reached.
 - A copy of a connected site at another address (a staging clone) notices,
   and sends nothing.
 - `define( 'MAILHOUSE_CENTRAL_DISABLED', true );` in `wp-config.php` stops
   the connector entirely, whatever the settings say.
 
-This version connects and reports. Synchronising subscribers and sending
-campaigns from the centre come in later versions.
+This version connects, reports, and tells the centre what changes.
+Subscribers a site already had before it connected, changes made at the
+centre, and sending campaigns from the centre come in later versions.
 
 ## Technical summary
 
@@ -122,7 +135,7 @@ campaigns from the centre come in later versions.
 - **No build step.** No npm, no Composer, no bundler — what is in `assets/` is
   what the browser gets, and the block is plain `createElement`.
 - **No external requests** except to the mail provider you configured.
-- Five tables, one option. Nothing in `wp_postmeta` except the emails' own
+- Six tables, one option. Nothing in `wp_postmeta` except the emails' own
   settings.
 - Delivery works by substituting a `PHPMailer` subclass, so everything
   WordPress and other plugins do to a message still happens — `phpmailer_init`,
@@ -143,7 +156,9 @@ mocks.
 | `tests/test-webhooks.php` — 50 assertions | pass |
 | `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
-| `tests/test-foundations.php` — 156 assertions | pass |
+| `tests/test-foundations.php` — 158 assertions | pass |
+| `tests/test-central.php` — 109 assertions | pass |
+| `tests/test-central-sync.php` — 138 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

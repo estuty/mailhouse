@@ -462,10 +462,11 @@ class Mailhouse_Subscribers {
 	/**
 	 * Delete subscribers outright, tags and queued sends included.
 	 *
-	 * @param int[] $ids Subscriber ids.
+	 * @param int[]  $ids    Subscriber ids.
+	 * @param string $reason Why: `admin`, or `erasure` for a request to be forgotten.
 	 * @return int Rows deleted.
 	 */
-	public static function delete( $ids ) {
+	public static function delete( $ids, $reason = 'admin' ) {
 		global $wpdb;
 
 		$ids = array_filter( array_map( 'absint', (array) $ids ) );
@@ -493,9 +494,10 @@ class Mailhouse_Subscribers {
 			 * object, so a plain list would arrive as a bare row whenever
 			 * exactly one subscriber was deleted.
 			 *
-			 * @param array<int,object> $rows The rows about to go, keyed by id.
+			 * @param array<int,object> $rows   The rows about to go, keyed by id.
+			 * @param string            $reason Why they are going.
 			 */
-			do_action( 'mailhouse_subscribers_deleting', $rows );
+			do_action( 'mailhouse_subscribers_deleting', $rows, (string) $reason );
 		}
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
@@ -594,9 +596,10 @@ class Mailhouse_Subscribers {
 	 *
 	 * @param object $subscriber Subscriber row.
 	 * @param string $reason     What the provider said.
+	 * @param string $kind       `hard`, or `soft_limit` for a mailbox that was full once too often.
 	 * @return bool Whether this call is what changed the status.
 	 */
-	public static function mark_bounced( $subscriber, $reason = '' ) {
+	public static function mark_bounced( $subscriber, $reason = '', $kind = 'hard' ) {
 		if ( ! $subscriber || 'bounced' === $subscriber->status ) {
 			return false;
 		}
@@ -609,8 +612,9 @@ class Mailhouse_Subscribers {
 		 *
 		 * @param object $subscriber Subscriber row.
 		 * @param string $reason     What the provider said.
+		 * @param string $kind       `hard` or `soft_limit`.
 		 */
-		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason );
+		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason, 'soft_limit' === $kind ? 'soft_limit' : 'hard' );
 
 		return true;
 	}
@@ -1191,7 +1195,7 @@ class Mailhouse_Subscribers {
 			);
 		}
 
-		self::delete( array( (int) $subscriber->id ) );
+		self::delete( array( (int) $subscriber->id ), 'erasure' );
 
 		return array(
 			'items_removed'  => true,

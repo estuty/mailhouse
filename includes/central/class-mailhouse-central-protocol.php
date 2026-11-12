@@ -345,6 +345,185 @@ class Mailhouse_Central_Protocol {
 		return array( $scheme . '://' . $host . $port . $path, null );
 	}
 
+	// -------------------------------------------------------------------------
+	// A subscriber's state
+
+	/**
+	 * Text as the centre will accept it: valid UTF-8, no NUL characters,
+	 * and no longer than the centre allows.
+	 *
+	 * The limit is counted the way the centre counts it, in UTF-16 units,
+	 * so a name made of emoji is cut where the centre would have refused it.
+	 *
+	 * @param string $value Text.
+	 * @param int    $max   Most UTF-16 units.
+	 * @return string
+	 */
+	public static function text( $value, $max ) {
+		$value = str_replace( "\0", '', (string) $value );
+
+		if ( '' === $value ) {
+			return '';
+		}
+
+		if ( ! preg_match( '//u', $value ) ) {
+			$value = (string) wp_check_invalid_utf8( $value, true );
+		}
+
+		// Shorter in bytes than the limit is in units: nothing to cut.
+		if ( strlen( $value ) <= $max ) {
+			return $value;
+		}
+
+		$units = static function ( $text ) {
+			return mb_strlen( $text, 'UTF-8' ) + (int) preg_match_all( '/[\x{10000}-\x{10FFFF}]/u', $text );
+		};
+
+		while ( '' !== $value && $units( $value ) > $max ) {
+			$over  = $units( $value ) - $max;
+			$value = mb_substr( $value, 0, max( 0, mb_strlen( $value, 'UTF-8' ) - (int) ceil( $over / 2 ) ), 'UTF-8' );
+		}
+
+		return $value;
+	}
+
+	/**
+	 * A date from this site's tables, as the protocol writes one:
+	 * `2026-11-12T09:30:00Z`. The tables hold UTC.
+	 *
+	 * @param string|null $datetime `Y-m-d H:i:s`, or nothing.
+	 * @param bool        $required Whether something must be returned.
+	 * @return string|null Null for a date that is absent or never was.
+	 */
+	public static function timestamp( $datetime, $required = false ) {
+		$datetime = (string) $datetime;
+
+		if ( preg_match( '/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/', $datetime, $m )
+			&& (int) $m[1] > 0 && checkdate( (int) $m[2], (int) $m[3], (int) $m[1] )
+			&& (int) $m[4] < 24 && (int) $m[5] < 60 && (int) $m[6] < 60 ) {
+			return $m[1] . '-' . $m[2] . '-' . $m[3] . 'T' . $m[4] . ':' . $m[5] . ':' . $m[6] . 'Z';
+		}
+
+		return $required ? '1970-01-01T00:00:00Z' : null;
+	}
+
+	/**
+	 * A subscriber as the centre is told about one: everything that is
+	 * synchronised, and the hash of it.
+	 *
+	 * Never part of it: the subscriber's keys, the WordPress user id, and
+	 * the send, open and click counters.
+	 *
+	 * @param object $row     Subscriber row.
+	 * @param int[]  $tag_ids The ids of the tags they hold.
+	 * @return array
+	 */
+	public static function subscriber_state( $row, array $tag_ids ) {
+		$fields  = array();
+		$decoded = isset( $row->fields ) && is_string( $row->fields ) && '' !== $row->fields ? json_decode( $row->fields, true ) : array();
+
+		if ( is_array( $decoded ) ) {
+			foreach ( $decoded as $name => $value ) {
+				$name = self::text( (string) $name, 60 );
+
+				if ( '' === $name || ! is_scalar( $value ) ) {
+					continue;
+				}
+
+				if ( count( $fields ) >= 100 ) {
+					break;
+				}
+
+				$fields[ $name ] = self::text( (string) $value, 2000 );
+			}
+		}
+
+		$tags = array_values( array_unique( array_filter( array_map( 'intval', $tag_ids ) ) ) );
+		sort( $tags, SORT_NUMERIC );
+
+		// An address is told only in the one spelling both ends agree on.
+		$packed = isset( $row->ip ) && '' !== (string) $row->ip ? @inet_pton( (string) $row->ip ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		$ip     = false !== $packed ? inet_ntop( $packed ) : false;
+
+		$state = array(
+			'local_id'        => (int) $row->id,
+			'email'           => self::text( (string) $row->email, 320 ),
+			'first_name'      => self::text( (string) $row->first_name, 200 ),
+			'last_name'       => self::text( (string) $row->last_name, 200 ),
+			// An object, even when empty.
+			'fields'          => $fields ? $fields : new stdClass(),
+			'status'          => (string) $row->status,
+			'source'          => self::text( (string) $row->source, 60 ),
+			'signup_ip'       => false !== $ip ? $ip : null,
+			'created_at'      => self::timestamp( isset( $row->created_at ) ? $row->created_at : '', true ),
+			'confirmed_at'    => self::timestamp( isset( $row->confirmed_at ) ? $row->confirmed_at : '' ),
+			'unsubscribed_at' => self::timestamp( isset( $row->unsubscribed_at ) ? $row->unsubscribed_at : '' ),
+			'tags'            => array_slice( $tags, 0, 1000 ),
+			'revision'        => isset( $row->revision ) ? (int) $row->revision : 0,
+		);
+
+		$state['hash'] = self::state_hash( $state );
+
+		return $state;
+	}
+
+	/**
+	 * The one spelling of a state, which is what is hashed.
+	 *
+	 * Fourteen lines joined by a line feed, with none after the last. Text
+	 * is percent-encoded exactly as in a signed request's query; custom
+	 * fields are ordered by name and tags by number; an absent date or
+	 * address is an empty value.
+	 *
+	 * @param array $state A state, with or without its hash.
+	 * @return string
+	 */
+	public static function canonical_state( array $state ) {
+		$pairs = array();
+
+		foreach ( (array) $state['fields'] as $name => $value ) {
+			$pairs[] = array( (string) $name, (string) $value );
+		}
+
+		$tags = array_map( 'intval', (array) $state['tags'] );
+		sort( $tags, SORT_NUMERIC );
+
+		$text = static function ( $value ) {
+			return null === $value ? '' : rawurlencode( (string) $value );
+		};
+
+		return implode(
+			"\n",
+			array(
+				'MH1-STATE',
+				'local_id=' . (int) $state['local_id'],
+				'email=' . $text( $state['email'] ),
+				'first_name=' . $text( $state['first_name'] ),
+				'last_name=' . $text( $state['last_name'] ),
+				'fields=' . self::canonical_query( $pairs ),
+				'status=' . (string) $state['status'],
+				'source=' . $text( $state['source'] ),
+				'signup_ip=' . $text( $state['signup_ip'] ),
+				'created_at=' . (string) $state['created_at'],
+				'confirmed_at=' . ( null === $state['confirmed_at'] ? '' : (string) $state['confirmed_at'] ),
+				'unsubscribed_at=' . ( null === $state['unsubscribed_at'] ? '' : (string) $state['unsubscribed_at'] ),
+				'tags=' . implode( ',', $tags ),
+				'revision=' . (int) $state['revision'],
+			)
+		);
+	}
+
+	/**
+	 * The hash of a state: how two copies of a subscriber are compared
+	 * without comparing every field.
+	 *
+	 * @param array $state A state.
+	 * @return string Lower-case hex.
+	 */
+	public static function state_hash( array $state ) {
+		return hash( 'sha256', self::canonical_state( $state ) );
+	}
+
 	/**
 	 * What is sent as `site_url_hash`: sha256 of the canonical address.
 	 *

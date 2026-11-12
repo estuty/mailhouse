@@ -119,13 +119,13 @@ both run it.
 | `mailhouse_subscriber_updated` | An address, name, custom field, status or one of its dates changes | `object $after, object $before, string[] $changed` |
 | `mailhouse_subscriber_confirmed` | Somebody joins for real | `object $subscriber` |
 | `mailhouse_subscriber_unsubscribed` | Somebody leaves | `object $subscriber, string $source` |
-| `mailhouse_subscriber_bounced` | An address is retired as undeliverable | `object $subscriber, string $reason` |
+| `mailhouse_subscriber_bounced` | An address is retired as undeliverable | `object $subscriber, string $reason, string $kind` — `hard`, or `soft_limit` for a mailbox that was full once too often |
 | `mailhouse_subscriber_resubscribed` | Somebody who unsubscribed comes back from their preferences page | `object $subscriber, string $by` |
 | `mailhouse_subscriber_tags_changed` | The set of tags on a subscriber changes | `int $subscriber_id, int[] $added, int[] $removed` |
 | `mailhouse_tag_saved` | A tag is created or renamed | `object $tag` |
 | `mailhouse_tag_deleted` | A tag is deleted | `object $tag, int[] $holders` |
 | `mailhouse_webhook_event` | Any provider event, matched or not | `array $event, ?object $subscriber` |
-| `mailhouse_subscribers_deleting` | Rows are about to be deleted | `array<int,object> $rows`, keyed by id |
+| `mailhouse_subscribers_deleting` | Rows are about to be deleted | `array<int,object> $rows`, keyed by id; `string $reason` — `admin`, or `erasure` from the privacy eraser |
 | `mailhouse_subscribers_deleted` | Rows are deleted | `int[] $ids` |
 | `mailhouse_campaign_queued` | A campaign is queued | `int $campaign_id, int $queued` |
 | `mailhouse_campaign_finished` | Its last message goes out | `int $campaign_id, array $stats` |

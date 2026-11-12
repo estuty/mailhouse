@@ -801,7 +801,7 @@ class Mailhouse_Webhooks {
 				// is not. The count is cleared again the next time the
 				// provider confirms a delivery.
 				if ( $limit > 0 && $bounces >= $limit ) {
-					Mailhouse_Subscribers::mark_bounced( Mailhouse_Subscribers::get( $id ), $event['reason'] );
+					Mailhouse_Subscribers::mark_bounced( Mailhouse_Subscribers::get( $id ), $event['reason'], 'soft_limit' );
 				}
 				break;
 
