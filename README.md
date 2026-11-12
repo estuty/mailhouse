@@ -92,6 +92,30 @@ imports them.
 | [DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | Structure, hooks, templates |
 | [MIGRATING.md](docs/MIGRATING.md) | Coming from Noptin or WP Mail SMTP |
 
+## Mailhouse Central (optional, in development)
+
+A site can be connected to a [Mailhouse Central](https://github.com/estuty/mailhouse-central)
+installation, so that several sites' newsletters can be seen from one
+dashboard. It is off unless you turn it on, under **Settings → Central**:
+paste the centre's address and the single-use token its dashboard gives
+you.
+
+- A site that is not connected does nothing new: no scheduled work, no
+  requests, no extra database query.
+- A connected site makes its own key pair. The private half is encrypted in
+  the database and never leaves the site, or can be supplied as
+  `MAILHOUSE_CENTRAL_PRIVATE_KEY` in `wp-config.php`.
+- It reports in once a minute: versions, counts, and which mail transport
+  is in use. Never an address, a host name or a credential.
+- The site keeps working by itself whether or not the centre can be reached.
+- A copy of a connected site at another address (a staging clone) notices,
+  and sends nothing.
+- `define( 'MAILHOUSE_CENTRAL_DISABLED', true );` in `wp-config.php` stops
+  the connector entirely, whatever the settings say.
+
+This version connects and reports. Synchronising subscribers and sending
+campaigns from the centre come in later versions.
+
 ## Technical summary
 
 - WordPress 6.0+, PHP 7.4+ (tested on 8.3), MySQL 5.7+ / MariaDB 10.3+

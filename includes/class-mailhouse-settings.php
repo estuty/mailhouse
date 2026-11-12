@@ -48,6 +48,8 @@ class Mailhouse_Settings {
 		'mandrill_key',
 		'webhook_mailgun_key',
 		'webhook_resend_secret',
+		// This site's signing key for Mailhouse Central. Never on a form.
+		'central_private_key',
 	);
 
 	/**
@@ -167,6 +169,12 @@ class Mailhouse_Settings {
 			'social_tiktok'       => '',
 			'track_opens'         => false,
 			'track_clicks'        => false,
+
+			// Mailhouse Central. Whether this site is connected is kept here,
+			// in the option every request already loads, so that a site which
+			// is not connected never looks for the connection's own option.
+			'central_connected'   => false,
+			'central_private_key' => '',
 
 			// Housekeeping.
 			'delete_data'         => false,

@@ -48,6 +48,7 @@ delete_option( 'mailhouse_key' );
 delete_option( 'mailhouse_webhook_key' );
 delete_option( 'mailhouse_new_post_seeded' );
 delete_option( 'mailhouse_install_lock' );
+delete_option( 'mailhouse_central' );
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query(

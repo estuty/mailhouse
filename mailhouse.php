@@ -48,6 +48,7 @@ function mailhouse_autoload( $class ) {
 		'includes/list/',
 		'includes/campaigns/',
 		'includes/admin/',
+		'includes/central/',
 	);
 
 	foreach ( $dirs as $dir ) {
