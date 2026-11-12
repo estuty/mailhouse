@@ -30,7 +30,7 @@ class Mailhouse_Central_Status {
 		 *
 		 * @param string[] $capabilities Capability names.
 		 */
-		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', array( 'sync.v1' ) ), 'is_string' ) );
+		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', array( 'sync.v1', 'reconcile.v1' ) ), 'is_string' ) );
 	}
 
 	/**
@@ -70,6 +70,7 @@ class Mailhouse_Central_Status {
 				'clicks' => (bool) mailhouse_option( 'track_clicks', false ),
 			),
 			'outbox'         => Mailhouse_Central_Sync::report(),
+			'sync'           => Mailhouse_Central_Reconcile::report(),
 			'queue'          => self::queue(),
 			'subscribers'    => array(
 				'subscribed'   => (int) $subscribers['subscribed'],

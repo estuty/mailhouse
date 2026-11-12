@@ -30,6 +30,7 @@ class Mailhouse_Central_Screen {
 		add_action( 'admin_post_mailhouse_central_connect', array( $this, 'connect' ) );
 		add_action( 'admin_post_mailhouse_central_disconnect', array( $this, 'disconnect' ) );
 		add_action( 'admin_post_mailhouse_central_heartbeat', array( $this, 'heartbeat' ) );
+		add_action( 'admin_post_mailhouse_central_compare', array( $this, 'compare' ) );
 	}
 
 	/**
@@ -282,6 +283,28 @@ class Mailhouse_Central_Screen {
 	}
 
 	/**
+	 * Ask for this site's list to be compared with the centre's copy.
+	 *
+	 * Nothing is compared here and now: the comparison is made a page at a
+	 * time on the scheduled runs that follow.
+	 *
+	 * @return void
+	 */
+	public function compare() {
+		$this->guard( 'mailhouse_central_compare' );
+
+		if ( 'connected' !== Mailhouse_Central_Identity::status() ) {
+			$this->finish( 'error', __( 'This site is not connected, so there is nothing to compare with.', 'mailhouse' ) );
+		}
+
+		if ( '' === (string) Mailhouse_Central_Identity::get( 'needs_reconcile' ) ) {
+			Mailhouse_Central_Identity::update( array( 'needs_reconcile' => 'requested' ) );
+		}
+
+		$this->finish( 'success', __( 'This site’s list will be compared with the centre’s copy over the next few minutes. Nothing on this site is changed by it.', 'mailhouse' ) );
+	}
+
+	/**
 	 * Print the outcome of the last action, once.
 	 *
 	 * @return void
@@ -461,11 +484,39 @@ class Mailhouse_Central_Screen {
 			);
 		}
 
-		if ( '' !== $state['needs_reconcile'] ) {
+		if ( '' !== $state['needs_reconcile'] && 'requested' !== $state['needs_reconcile'] ) {
 			printf(
 				'<div class="notice notice-warning inline"><p>%s</p></div>',
-				esc_html__( 'Some of this site’s changes did not reach the centre one by one. Nothing is lost here: the centre’s copy is brought up to date the next time the two are compared.', 'mailhouse' )
+				esc_html__( 'Some of this site’s changes did not reach the centre one by one. Nothing is lost here: this site’s list is about to be compared with the centre’s copy, which brings it up to date.', 'mailhouse' )
 			);
+		}
+
+		$backfill = (array) $state['backfill'];
+		$compare  = (array) $state['reconcile'];
+		$last     = (array) $state['last_reconcile'];
+
+		if ( $backfill && 'done' !== $backfill['phase'] ) {
+			/* translators: %s: a subscriber id. */
+			$copying = sprintf( __( 'under way: subscribers up to number %s have been sent', 'mailhouse' ), number_format_i18n( (int) $backfill['cursor'] ) );
+		} else {
+			$copying = $backfill && ! empty( $backfill['completed_at'] ) ? $this->when( (int) $backfill['completed_at'] ) : __( 'done', 'mailhouse' );
+		}
+
+		if ( $compare ) {
+			/* translators: %s: number of subscribers. */
+			$comparing = sprintf( __( 'under way: %s subscribers checked so far', 'mailhouse' ), number_format_i18n( (int) $compare['checked'] ) );
+		} elseif ( '' !== $state['needs_reconcile'] || $state['want_reconcile'] ) {
+			$comparing = __( 'about to start', 'mailhouse' );
+		} elseif ( $state['last_reconcile_at'] && $last ) {
+			$comparing = sprintf(
+				/* translators: 1: a length of time ago, 2: subscribers checked, 3: subscribers sent again. */
+				__( '%1$s: %2$s checked, %3$s sent again', 'mailhouse' ),
+				$this->when( (int) $state['last_reconcile_at'] ),
+				number_format_i18n( (int) $last['checked'] ),
+				number_format_i18n( (int) $last['sent'] )
+			);
+		} else {
+			$comparing = __( 'not yet', 'mailhouse' );
 		}
 
 		$waiting = Mailhouse_Central_Outbox::waiting();
@@ -481,6 +532,8 @@ class Mailhouse_Central_Screen {
 				/* translators: 1: number of changes, 2: a length of time ago. */
 				: sprintf( __( '%1$s, the oldest from %2$s', 'mailhouse' ), number_format_i18n( $waiting['depth'] ), $this->when( strtotime( $waiting['oldest'] . ' UTC' ) ) ),
 			__( 'Changes last sent', 'mailhouse' )      => $this->when( $state['last_push_at'] ),
+			__( 'First copy of the list', 'mailhouse' ) => $copying,
+			__( 'Last compared', 'mailhouse' )          => $comparing,
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);
@@ -499,6 +552,11 @@ class Mailhouse_Central_Screen {
 				<input type="hidden" name="action" value="mailhouse_central_heartbeat" />
 				<?php wp_nonce_field( 'mailhouse_central_heartbeat' ); ?>
 				<?php submit_button( __( 'Report in now', 'mailhouse' ), 'secondary', 'submit', false ); ?>
+			</form>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;margin-right:1em">
+				<input type="hidden" name="action" value="mailhouse_central_compare" />
+				<?php wp_nonce_field( 'mailhouse_central_compare' ); ?>
+				<?php submit_button( __( 'Compare with the centre', 'mailhouse' ), 'secondary', 'submit', false ); ?>
 			</form>
 			<?php
 		}

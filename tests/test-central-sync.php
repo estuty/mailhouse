@@ -88,7 +88,10 @@ final class MHS_Centre {
 	/** @var int */
 	public static $epoch = 1;
 
-	/** @var string ok, down, 500, 401, 429, 410, or a 423 reason. */
+	/** @var array[] Events received under earlier epochs. */
+	public static $archive = array();
+
+	/** @var string ok, down, gap, 500, 401, 429, 410, or a 423 reason. */
 	public static $mode = 'ok';
 
 	/** @var int Store this many pushes and then lose the answer. */
@@ -130,11 +133,24 @@ final class MHS_Centre {
 	public static function reset() {
 		self::calm();
 		self::$events   = array();
+		self::$archive  = array();
 		self::$received = 0;
 		self::$epoch    = 1;
 		self::$bodies   = array();
 		self::$invalid  = array();
 		self::$verified = array();
+	}
+
+	/**
+	 * Start the website's sequence again, as the real centre does for a
+	 * site whose history has gone backwards.
+	 */
+	public static function new_epoch() {
+		self::$archive  = array_merge( self::$archive, array_values( self::$events ) );
+		self::$events   = array();
+		self::$received = 0;
+
+		return ++self::$epoch;
 	}
 
 	/**
@@ -353,6 +369,11 @@ final class MHS_Centre {
 			if ( '' !== $problem ) {
 				return self::answer( 422, array( 'code' => 'validation_failed' ) );
 			}
+		}
+
+		if ( 'gap' === self::$mode ) {
+			// A centre that is never satisfied.
+			return self::answer( 409, array( 'code' => 'sequence_gap', 'expected_seq' => $events[0]['seq'] + 1 ) );
 		}
 
 		if ( $json['epoch'] !== self::$epoch ) {
@@ -1335,14 +1356,23 @@ $push    = Mailhouse_Central_Sync::push();
 $last    = end( MHS_Centre::$events );
 check( 'a site whose numbers have gone backwards is refused, renumbers, and is accepted', 1 === $push['sent'] && (int) $rewound->id === $last['subject']['local_id'] && MHS_Centre::$received === $last['seq'] && 'sequence_regression' === Mailhouse_Central_Identity::get( 'needs_reconcile' ) );
 
-// The centre has moved the website to a new epoch.
+// The centre has moved the website to a new epoch: it has found this site
+// counting from an older number, as one restored from a backup does.
 MHS_Centre::calm();
-MHS_Centre::$epoch = 4;
-mhs_subscriber();
-$push = Mailhouse_Central_Sync::push();
-check( 'a centre on another epoch says which, and the events are sent again under it', 1 === $push['sent'] && 4 === (int) Mailhouse_Central_Identity::get( 'epoch' ) && 2 === MHS_Centre::pushes() );
+Mailhouse_Central_Identity::update( array( 'needs_reconcile' => '' ) );
+$epoch = MHS_Centre::new_epoch();
+$kept  = array( mhs_subscriber(), mhs_subscriber() );
+$push  = Mailhouse_Central_Sync::push();
+check( 'a centre on another epoch says which; what was waiting is dropped, not sent under it', 0 === $push['sent'] && $epoch === (int) Mailhouse_Central_Identity::get( 'epoch' ) && 0 === Mailhouse_Central_Outbox::waiting()['depth'] && array() === MHS_Centre::$events && 1 === MHS_Centre::pushes() );
+check( 'the site asks for the two copies to be compared, which is how the centre learns of what was dropped', 'new_epoch' === Mailhouse_Central_Identity::get( 'needs_reconcile' ) );
+check( 'no subscriber is touched by it', 'subscribed' === Mailhouse_Subscribers::get( (int) $kept[0]->id )->status && null !== Mailhouse_Subscribers::get( (int) $kept[1]->id ) );
 
-MHS_Centre::$epoch = 5;
+$next = mhs_subscriber();
+$push = Mailhouse_Central_Sync::push();
+check( 'the next change is numbered one, under the new epoch', 1 === $push['sent'] && array( 1 ) === array_keys( MHS_Centre::$events ) && (int) $next->id === MHS_Centre::$events[1]['subject']['local_id'] );
+
+$epoch = MHS_Centre::new_epoch();
+mhs_subscriber();
 Mailhouse_Central_Identity::update(
 	array(
 		'last_heartbeat_at' => 0,
@@ -1350,7 +1380,11 @@ Mailhouse_Central_Identity::update(
 	)
 );
 Mailhouse_Central::heartbeat();
-check( 'a heartbeat learns the epoch too', 5 === (int) Mailhouse_Central_Identity::get( 'epoch' ) );
+check( 'a heartbeat learns of a new epoch too, and does the same', $epoch === (int) Mailhouse_Central_Identity::get( 'epoch' ) && 0 === Mailhouse_Central_Outbox::waiting()['depth'] );
+
+mhs_subscriber();
+Mailhouse_Central_Sync::push();
+check( 'and the count starts from one again', array( 1 ) === array_keys( MHS_Centre::$events ) );
 
 // An event id the centre already holds under another number.
 MHS_Centre::calm();
@@ -1363,24 +1397,9 @@ check( 'an event whose id is taken is given another and sent', 1 === $push['sent
 
 // A centre that keeps refusing.
 MHS_Centre::calm();
-MHS_Centre::$epoch = 6;
+MHS_Centre::$mode = 'gap';
 mhs_subscriber();
-add_filter(
-	'pre_http_request',
-	$stubborn = static function ( $pre, $args, $url ) {
-		if ( false === strpos( $url, '/sync/events' ) ) {
-			return $pre;
-		}
-
-		++MHS_Centre::$epoch;
-
-		return $pre;
-	},
-	5,
-	3
-);
 $push = Mailhouse_Central_Sync::push();
-remove_filter( 'pre_http_request', $stubborn, 5 );
 check( 'a repair that does not work is tried once, not for ever', 0 === $push['sent'] && 2 === MHS_Centre::pushes() && (int) Mailhouse_Central_Identity::get( 'push_next_at' ) > time() );
 MHS_Centre::calm();
 mhs_due();
@@ -1531,6 +1550,14 @@ new Mailhouse_Central();
 check( 'the heartbeat runs before this site’s mail, and the push after it', 5 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'tick' ) ) && 20 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'push' ) ) );
 
 MHS_Centre::calm();
+// The first copy of the list and the comparison have a suite of their own.
+Mailhouse_Central_Identity::update(
+	array(
+		'backfill'        => array(),
+		'needs_reconcile' => '',
+		'want_reconcile'  => false,
+	)
+);
 mhs_subscriber();
 mhs_due();
 Mailhouse_Central::push();

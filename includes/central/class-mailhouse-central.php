@@ -113,7 +113,14 @@ class Mailhouse_Central {
 			return;
 		}
 
-		Mailhouse_Central_Sync::push();
+		// Send what is waiting; then do a piece of the backfill or the
+		// comparison, which writes more; and so on until there is nothing
+		// to do or the time is up. One time box for all of it.
+		$deadline = time() + Mailhouse_Central_Sync::TIME_BOX;
+
+		do {
+			Mailhouse_Central_Sync::push( max( 1, $deadline - time() ) );
+		} while ( time() < $deadline && Mailhouse_Central_Reconcile::work( $deadline ) );
 	}
 
 	/**
@@ -188,16 +195,20 @@ class Mailhouse_Central {
 						'centre_status'     => isset( $body['status'] ) && 'paused' === $body['status'] ? 'paused' : 'connected',
 						'suspended_reason'  => '',
 						'last_heartbeat_at' => $now,
-						// The centre moves a website to a new epoch when its
-						// sequence has to start again; events are sent under
-						// whichever it says.
-						'epoch'             => isset( $body['epoch'] ) && (int) $body['epoch'] >= 1 ? (int) $body['epoch'] : max( 1, (int) Mailhouse_Central_Identity::get( 'epoch' ) ),
+						// The centre says when it would like the two copies compared.
+						'want_reconcile'    => (bool) Mailhouse_Central_Identity::get( 'want_reconcile' ) || ( isset( $body['want'] ) && is_array( $body['want'] ) && in_array( 'reconcile', $body['want'], true ) ),
 						'clock_offset'      => Mailhouse_Central_Client::offset_from( $body ),
 						'last_error'        => '',
 						'failures'          => 0,
 						'next_attempt_at'   => 0,
 					)
 				);
+
+				// The centre moves a website to a new epoch when its
+				// sequence has to start again.
+				if ( isset( $body['epoch'] ) ) {
+					Mailhouse_Central_Sync::new_epoch( (int) $body['epoch'] );
+				}
 
 				return true;
 

@@ -246,12 +246,12 @@ class Mailhouse_Central_Sync {
 					return self::failed( __( 'The centre is on another epoch and did not say which.', 'mailhouse' ) );
 				}
 
-				Mailhouse_Central_Identity::update(
-					array(
-						'epoch'           => (int) $reply['epoch'],
-						'needs_reconcile' => $code,
-					)
-				);
+				// The centre has started this site's sequence again: it has
+				// found the site counting from an older number, as a site
+				// restored from a backup does. What is waiting belongs to
+				// the old count and is dropped; the comparison that follows
+				// tells the centre how things stand.
+				self::new_epoch( (int) $reply['epoch'] );
 
 				return self::once( $code );
 
@@ -365,7 +365,7 @@ class Mailhouse_Central_Sync {
 	 * @param string $message What went wrong.
 	 * @return string Always `stop`.
 	 */
-	protected static function failed( $message ) {
+	public static function failed( $message ) {
 		$failures = (int) Mailhouse_Central_Identity::get( 'push_failures' ) + 1;
 		$wait     = (int) min( 15 * MINUTE_IN_SECONDS, MINUTE_IN_SECONDS * pow( 2, min( $failures, 5 ) - 1 ) );
 		$wait    += wp_rand( 0, (int) ( $wait / 5 ) );
@@ -503,6 +503,19 @@ class Mailhouse_Central_Sync {
 	 * @return array State values to store with the registration.
 	 */
 	public static function begin( $last_seq_received, $epoch ) {
+		return array_merge(
+			array( 'epoch' => max( 1, (int) $epoch ) ),
+			self::renumber( $last_seq_received )
+		);
+	}
+
+	/**
+	 * Drop whatever is waiting and count from a given number.
+	 *
+	 * @param int $last_seq The number the centre last received; the next row is one more.
+	 * @return array State values: the offset, and the row the count starts after.
+	 */
+	protected static function renumber( $last_seq ) {
 		$marker  = Mailhouse_Central_Outbox::record( 'site.connected', 'site', 0 );
 		$highest = max( $marker, Mailhouse_Central_Outbox::highest() );
 
@@ -510,10 +523,51 @@ class Mailhouse_Central_Sync {
 		Mailhouse_Central_Outbox::reset();
 
 		return array(
-			'epoch'        => max( 1, (int) $epoch ),
-			'seq_offset'   => max( 0, (int) $last_seq_received ) - $highest,
+			'seq_offset'   => max( 0, (int) $last_seq ) - $highest,
 			'outbox_acked' => $highest,
 		);
+	}
+
+	/**
+	 * The centre has moved this website to a new epoch.
+	 *
+	 * It does that when this site's history has gone backwards -- a
+	 * database restored from a backup. The sequence starts again from one.
+	 * Whatever was waiting to be sent is dropped: it was numbered under the
+	 * old count, and some of it may describe a past that is no longer this
+	 * site's. A comparison follows, in which the centre takes this site's
+	 * list as it is. A backfill that had not finished starts again.
+	 *
+	 * No subscriber on this site is touched.
+	 *
+	 * @param int $epoch The epoch the centre is now on.
+	 * @return bool Whether the epoch changed.
+	 */
+	public static function new_epoch( $epoch ) {
+		$epoch = (int) $epoch;
+
+		if ( $epoch < 1 || $epoch === (int) Mailhouse_Central_Identity::get( 'epoch' ) ) {
+			return false;
+		}
+
+		$backfill = (array) Mailhouse_Central_Identity::get( 'backfill' );
+
+		Mailhouse_Central_Identity::update(
+			array_merge(
+				self::renumber( 0 ),
+				array(
+					'epoch'           => $epoch,
+					'reconcile'       => array(),
+					'needs_reconcile' => 'new_epoch',
+					'backfill'        => $backfill && 'done' !== $backfill['phase'] ? Mailhouse_Central_Reconcile::fresh_backfill() : $backfill,
+					'push_failures'   => 0,
+					'push_next_at'    => 0,
+					'push_error'      => '',
+				)
+			)
+		);
+
+		return true;
 	}
 
 	/**

@@ -119,15 +119,24 @@ you.
   when it can. After thirty days, or a hundred thousand of them, they are
   dropped and the two copies are compared instead; no subscriber is touched
   by that.
+- When a site connects, the list it already has is copied to the centre a
+  few hundred subscribers at a time, on the scheduled runs. Afterwards the
+  two are compared once a day, when the centre asks, or when you press
+  **Compare with the centre**: the site sends each subscriber’s number,
+  revision and a hash, and then the full details of only those the centre
+  holds differently. A comparison never changes anything on the site.
+- If the site’s database is ever restored from a backup, the centre notices
+  and takes the restored list as it is. It does not put anybody back.
 - The site keeps working by itself whether or not the centre can be reached.
 - A copy of a connected site at another address (a staging clone) notices,
   and sends nothing.
 - `define( 'MAILHOUSE_CENTRAL_DISABLED', true );` in `wp-config.php` stops
   the connector entirely, whatever the settings say.
 
-This version connects, reports, and tells the centre what changes.
-Subscribers a site already had before it connected, changes made at the
-centre, and sending campaigns from the centre come in later versions.
+This version connects, reports, copies its list to the centre and keeps the
+copy right. Changes made at the centre, and sending campaigns from the
+centre, come in later versions: nothing the centre does changes this site
+yet.
 
 ## Technical summary
 
@@ -158,7 +167,8 @@ mocks.
 | `tests/test-updates.php` — 65 assertions | pass |
 | `tests/test-foundations.php` — 158 assertions | pass |
 | `tests/test-central.php` — 109 assertions | pass |
-| `tests/test-central-sync.php` — 138 assertions | pass |
+| `tests/test-central-sync.php` — 142 assertions | pass |
+| `tests/test-central-reconcile.php` — 65 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

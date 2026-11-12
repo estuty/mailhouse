@@ -97,6 +97,14 @@ class Mailhouse_Central_Identity {
 			'push_error'        => '',
 			// Why the two copies need comparing, when this site knows they do.
 			'needs_reconcile'   => '',
+			// Whether the centre has asked for a comparison.
+			'want_reconcile'    => false,
+			// The first copy of the list, and the comparison under way:
+			// where each has got to. Empty when there is none.
+			'backfill'          => array(),
+			'reconcile'         => array(),
+			'last_reconcile_at' => 0,
+			'last_reconcile'    => array(),
 		);
 	}
 
@@ -372,7 +380,10 @@ class Mailhouse_Central_Identity {
 					'registered_at'  => time(),
 					'clock_offset'   => Mailhouse_Central_Client::offset_from( $answer['body'] ),
 				),
-				Mailhouse_Central_Sync::begin( $accepted['last_seq_received'], $accepted['epoch'] )
+				Mailhouse_Central_Sync::begin( $accepted['last_seq_received'], $accepted['epoch'] ),
+				// The centre knows nothing yet of the subscribers this
+				// site already has. Telling it starts on the next scheduled run.
+				array( 'backfill' => Mailhouse_Central_Reconcile::fresh_backfill() )
 			)
 		);
 

@@ -367,21 +367,34 @@ class Mailhouse_Central_Outbox {
 			return;
 		}
 
+		$event = self::tag_event( $tag );
+
+		self::record( $event['type'], $event['subject_type'], $event['subject_id'], $event['data'] );
+	}
+
+	/**
+	 * A tag as the centre is told about one.
+	 *
+	 * @param object $tag Tag row.
+	 * @return array An event for record_many().
+	 */
+	public static function tag_event( $tag ) {
 		$id   = (int) $tag->id;
 		$name = Mailhouse_Central_Protocol::text( (string) $tag->name, 191 );
 		$slug = Mailhouse_Central_Protocol::text( (string) $tag->slug, 191 );
 
-		self::record(
-			'tag.saved',
-			'tag',
-			$id,
-			array(
+		return array(
+			'type'         => 'tag.saved',
+			'subject_type' => 'tag',
+			'subject_id'   => $id,
+			'data'         => array(
 				'local_id' => $id,
 				// Neither may be empty at the centre; a tag with no name is
 				// still a tag, and is known by its number.
 				'name'     => '' !== $name ? $name : 'Tag ' . $id,
 				'slug'     => '' !== $slug ? $slug : 'tag-' . $id,
-			)
+			),
+			'state'        => null,
 		);
 	}
 
@@ -433,6 +446,42 @@ class Mailhouse_Central_Outbox {
 		);
 
 		return $inserted ? (int) $wpdb->insert_id : 0;
+	}
+
+	/**
+	 * Write many events, in the order given, a hundred to a statement.
+	 *
+	 * For the backfill and the comparison, which write thousands. They are
+	 * the site's own doing, whatever else is going on in the request.
+	 *
+	 * @param array[] $events Each: type, subject_type, subject_id, data, state.
+	 * @return void
+	 */
+	public static function record_many( array $events ) {
+		global $wpdb;
+
+		$table = self::table();
+		$now   = mailhouse_now();
+
+		foreach ( array_chunk( $events, 100 ) as $chunk ) {
+			$values = array();
+
+			foreach ( $chunk as $event ) {
+				$values[] = $wpdb->prepare(
+					'(%s, %s, %s, %d, %s, %s, %s)',
+					wp_generate_uuid4(),
+					$event['type'],
+					$event['subject_type'],
+					(int) $event['subject_id'],
+					'local',
+					self::payload( (array) $event['data'], $event['state'] ),
+					$now
+				);
+			}
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( "INSERT INTO {$table} (event_id, type, subject_type, subject_id, origin, payload, occurred_at) VALUES " . implode( ',', $values ) );
+		}
 	}
 
 	/**
