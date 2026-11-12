@@ -6,3 +6,7 @@
 /tests               export-ignore
 /docs/audit          export-ignore
 /docs/architecture   export-ignore
+
+# The protocol's worked examples are compared with the centre's copy byte for
+# byte. A checkout must never give them another line ending.
+/tests/fixtures/*.json -text

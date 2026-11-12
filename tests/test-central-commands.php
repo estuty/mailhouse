@@ -598,7 +598,7 @@ check( 'a command id can be written down only once', (bool) $wpdb->get_var( "SHO
 check( 'the schema version is 1.4.0', '1.4.0' === Mailhouse_Install::DB_VERSION );
 
 $handler = (string) file_get_contents( dirname( __DIR__ ) . '/includes/central/class-mailhouse-central-commands.php' ); // phpcs:ignore
-check( 'nothing a command says chooses what is called: each kind is spelled out with its one function', false === strpos( $handler, 'call_user_func' ) && false === strpos( $handler, 'eval(' ) && 0 === preg_match( '/\$[a-z_]+\s*\(/', $handler ) && count( Mailhouse_Central_Commands::TYPES ) === preg_match_all( "/^\t\t\tcase '[a-z_.]+':$/m", $handler ) );
+check( 'nothing a command says chooses what is called: each kind is spelled out with its one function', false === strpos( $handler, 'call_user_func' ) && false === strpos( $handler, 'eval(' ) && 0 === preg_match( '/\$[a-z_]+\s*\(/', $handler ) && count( Mailhouse_Central_Commands::TYPES ) === preg_match_all( "/^\t\t\tcase '[a-z_.]+':\r?$/m", $handler ) );
 check( 'and none of those kinds is about subscribing', array() === preg_grep( '/subscribe$|resubscribe|confirm$|status/', array_diff( Mailhouse_Central_Commands::TYPES, array( 'subscriber.unsubscribe', 'subscriber.reconfirm' ) ) ) && in_array( 'subscriber.unsubscribe', Mailhouse_Central_Commands::TYPES, true ) );
 
 check( 'a site that is not connected does nothing about commands', array( 'applied' => 0, 'rejected' => 0, 'failed' => 0, 'error' => '' ) === Mailhouse_Central_Commands::work() && 0 === count( MHK_Centre::$requests ) );
