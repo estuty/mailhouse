@@ -35,16 +35,17 @@ class Mailhouse_Central_Client {
 	 * @param string     $path    Path, starting with a slash.
 	 * @param array|null $body    Body to send as JSON, or null for none.
 	 * @param int        $timeout Seconds.
+	 * @param array      $query   Query string, as a list of array( name, value ).
 	 * @return array{status:int,body:mixed}|WP_Error
 	 */
-	public static function signed( $method, $path, $body = null, $timeout = self::TIMEOUT ) {
+	public static function signed( $method, $path, $body = null, $timeout = self::TIMEOUT, array $query = array() ) {
 		$state = Mailhouse_Central_Identity::state();
 
 		if ( '' === $state['central_url'] || '' === $state['website_id'] ) {
 			return new WP_Error( 'mailhouse_central_unregistered', __( 'This site is not connected.', 'mailhouse' ) );
 		}
 
-		$answer = self::send( $state['central_url'], $method, $path, $body, $state, $timeout );
+		$answer = self::send( $state['central_url'], $method, $path, $body, $state, $timeout, $query );
 
 		if ( ! is_wp_error( $answer ) && 401 === $answer['status'] && is_array( $answer['body'] ) && isset( $answer['body']['code'] ) && 'clock_skew' === $answer['body']['code'] ) {
 			$offset = self::offset_from( $answer['body'] );
@@ -52,7 +53,7 @@ class Mailhouse_Central_Client {
 			if ( $offset !== (int) $state['clock_offset'] ) {
 				Mailhouse_Central_Identity::update( array( 'clock_offset' => $offset ) );
 
-				$answer = self::send( $state['central_url'], $method, $path, $body, Mailhouse_Central_Identity::state(), $timeout );
+				$answer = self::send( $state['central_url'], $method, $path, $body, Mailhouse_Central_Identity::state(), $timeout, $query );
 			}
 		}
 
@@ -68,9 +69,10 @@ class Mailhouse_Central_Client {
 	 * @param array|null $body    Body to send as JSON, or null for none.
 	 * @param array|null $state   Connection state to sign with, or null to send unsigned.
 	 * @param int        $timeout Seconds.
+	 * @param array      $query   Query string, as a list of array( name, value ).
 	 * @return array{status:int,body:mixed}|WP_Error
 	 */
-	public static function send( $central, $method, $path, $body, $state, $timeout = self::TIMEOUT ) {
+	public static function send( $central, $method, $path, $body, $state, $timeout = self::TIMEOUT, array $query = array() ) {
 		if ( Mailhouse_Central::disabled() ) {
 			return new WP_Error( 'mailhouse_central_disabled', __( 'The connector is switched off.', 'mailhouse' ) );
 		}
@@ -90,7 +92,7 @@ class Mailhouse_Central_Client {
 			$timestamp = (string) ( time() + (int) $state['clock_offset'] );
 			$nonce     = bin2hex( random_bytes( 16 ) );
 			$signature = Mailhouse_Central_Protocol::sign(
-				Mailhouse_Central_Protocol::canonical_request( $method, $path, array(), $timestamp, $nonce, $state['website_id'], $json ),
+				Mailhouse_Central_Protocol::canonical_request( $method, $path, $query, $timestamp, $nonce, $state['website_id'], $json ),
 				Mailhouse_Central_Identity::private_key()
 			);
 
@@ -118,7 +120,8 @@ class Mailhouse_Central_Client {
 			$args['body'] = $json;
 		}
 
-		$url = $central . $path;
+		// The query is sent exactly as it was signed.
+		$url = $central . $path . ( $query ? '?' . Mailhouse_Central_Protocol::canonical_query( $query ) : '' );
 
 		// The safe variant refuses private addresses and unusual ports,
 		// which is right for a real centre. The development switch exists

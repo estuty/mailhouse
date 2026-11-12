@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.3.0';
+	const DB_VERSION = '1.4.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -228,6 +228,28 @@ class Mailhouse_Install {
 			) {$collate};"
 		);
 
+		// What a Mailhouse Central installation has asked this site to do,
+		// and what became of each request: the record that makes a command
+		// arriving twice a command carried out once. It holds an id, a kind
+		// and an outcome, and nothing about any subscriber. Empty on a site
+		// that is not connected.
+		$inbox = self::table( 'inbox' );
+		dbDelta(
+			"CREATE TABLE {$inbox} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				command_id char(36) NOT NULL,
+				seq bigint(20) unsigned NOT NULL DEFAULT 0,
+				type varchar(40) NOT NULL DEFAULT '',
+				status varchar(12) NOT NULL DEFAULT 'applying',
+				result text DEFAULT NULL,
+				received_at datetime NOT NULL,
+				acked tinyint(1) NOT NULL DEFAULT 0,
+				PRIMARY KEY  (id),
+				UNIQUE KEY command_id (command_id),
+				KEY acked (acked)
+			) {$collate};"
+		);
+
 		self::seed_defaults();
 
 		// Added in 1.1.0, so it runs on upgrades too, not just new installs.
@@ -284,7 +306,7 @@ class Mailhouse_Install {
 	public static function drop_tables() {
 		global $wpdb;
 
-		foreach ( array( 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
+		foreach ( array( 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
 			$table = self::table( $name );
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery

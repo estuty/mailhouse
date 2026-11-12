@@ -14,6 +14,8 @@
  *
  * `define( 'MAILHOUSE_CENTRAL_DISABLED', true );` in wp-config.php stops the
  * connector entirely, whatever the database says.
+ * `define( 'MAILHOUSE_CENTRAL_READ_ONLY', true );` leaves it reporting and
+ * makes it refuse everything the centre asks it to change.
  *
  * @package Mailhouse
  */
@@ -163,7 +165,11 @@ class Mailhouse_Central {
 
 		Mailhouse_Central_Identity::update( array( 'last_tick_at' => $now ) );
 
-		self::heartbeat( self::TICK_TIMEOUT );
+		// What the centre has asked for is done here, before the queue runs:
+		// somebody the centre has just unsubscribed is not sent the next message.
+		if ( true === self::heartbeat( self::TICK_TIMEOUT ) ) {
+			Mailhouse_Central_Commands::work();
+		}
 	}
 
 	/**
@@ -197,6 +203,8 @@ class Mailhouse_Central {
 						'last_heartbeat_at' => $now,
 						// The centre says when it would like the two copies compared.
 						'want_reconcile'    => (bool) Mailhouse_Central_Identity::get( 'want_reconcile' ) || ( isset( $body['want'] ) && is_array( $body['want'] ) && in_array( 'reconcile', $body['want'], true ) ),
+						// And how many commands it is holding for this site.
+						'commands_pending'  => isset( $body['commands_pending'] ) ? max( 0, (int) $body['commands_pending'] ) : 0,
 						'clock_offset'      => Mailhouse_Central_Client::offset_from( $body ),
 						'last_error'        => '',
 						'failures'          => 0,

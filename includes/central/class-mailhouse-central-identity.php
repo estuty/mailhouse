@@ -105,6 +105,12 @@ class Mailhouse_Central_Identity {
 			'reconcile'         => array(),
 			'last_reconcile_at' => 0,
 			'last_reconcile'    => array(),
+			// Commands. The number of the last one dealt with, how many the
+			// centre said were waiting when this site last reported in, and
+			// what was wrong with the last one that could not be trusted.
+			'inbox_seq'         => 0,
+			'commands_pending'  => 0,
+			'command_error'     => '',
 		);
 	}
 

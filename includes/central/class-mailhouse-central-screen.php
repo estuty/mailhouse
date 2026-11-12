@@ -484,6 +484,14 @@ class Mailhouse_Central_Screen {
 			);
 		}
 
+		if ( '' !== $state['command_error'] ) {
+			printf(
+				'<div class="notice notice-error inline"><p>%s %s</p></div>',
+				esc_html__( 'Something the centre asked this site to do was not done:', 'mailhouse' ),
+				esc_html( $state['command_error'] )
+			);
+		}
+
 		if ( '' !== $state['needs_reconcile'] && 'requested' !== $state['needs_reconcile'] ) {
 			printf(
 				'<div class="notice notice-warning inline"><p>%s</p></div>',
@@ -521,6 +529,25 @@ class Mailhouse_Central_Screen {
 
 		$waiting = Mailhouse_Central_Outbox::waiting();
 
+		if ( ! Mailhouse_Central_Commands::accepting() ) {
+			$changes = defined( 'MAILHOUSE_CENTRAL_READ_ONLY' ) && MAILHOUSE_CENTRAL_READ_ONLY
+				? __( 'refused: switched off in wp-config.php (MAILHOUSE_CENTRAL_READ_ONLY)', 'mailhouse' )
+				: __( 'refused', 'mailhouse' );
+		} else {
+			$dealt = Mailhouse_Central_Commands::counts();
+			$total = $dealt['applied'] + $dealt['rejected'] + $dealt['failed'];
+
+			$changes = 0 === $total
+				? __( 'accepted; none asked for yet', 'mailhouse' )
+				: sprintf(
+					/* translators: 1: number carried out, 2: number refused, 3: number that failed. */
+					__( 'accepted: %1$s carried out, %2$s refused, %3$s failed', 'mailhouse' ),
+					number_format_i18n( $dealt['applied'] ),
+					number_format_i18n( $dealt['rejected'] ),
+					number_format_i18n( $dealt['failed'] )
+				);
+		}
+
 		$rows = array(
 			__( 'Central address', 'mailhouse' )        => $state['central_url'],
 			__( 'This website’s id there', 'mailhouse' ) => $state['website_id'],
@@ -534,6 +561,7 @@ class Mailhouse_Central_Screen {
 			__( 'Changes last sent', 'mailhouse' )      => $this->when( $state['last_push_at'] ),
 			__( 'First copy of the list', 'mailhouse' ) => $copying,
 			__( 'Last compared', 'mailhouse' )          => $comparing,
+			__( 'Changes asked for by the centre', 'mailhouse' ) => $changes,
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);

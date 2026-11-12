@@ -133,10 +133,36 @@ you.
 - `define( 'MAILHOUSE_CENTRAL_DISABLED', true );` in `wp-config.php` stops
   the connector entirely, whatever the settings say.
 
-This version connects, reports, copies its list to the centre and keeps the
-copy right. Changes made at the centre, and sending campaigns from the
-centre, come in later versions: nothing the centre does changes this site
-yet.
+**Changes asked for by the centre.** Once an administrator of the centre
+has allowed it for this website, the centre can ask this site to change a
+subscriber's name, custom fields or tags; to unsubscribe, mark as bounced
+or remove somebody; to add somebody; to send its confirmation message again
+to somebody who has not confirmed; and to make, rename or delete a tag.
+
+- Each request is carried out by the same function a click in this site's
+  own admin would reach, under the same rules, on a scheduled run, before
+  the mail queue.
+- **Nothing the centre can ask makes anybody subscribed.** There is no
+  such request. Somebody who has unsubscribed or bounced is not added back
+  and is not sent a message because the centre asked; somebody added from
+  the centre is sent this site's confirmation message and is pending until
+  they follow the link, unless the centre's operator states that they had
+  already agreed.
+- A request is carried out only if it is signed by the centre this site
+  registered with, was made for this website, comes after everything
+  already dealt with, and has not expired. Each is carried out at most
+  once, however many times it arrives. A change to a name or fields is
+  refused if the subscriber has changed here since the centre last saw
+  them.
+- What was asked and what became of it is kept in an inbox table: an id, a
+  kind and an outcome, nothing about any subscriber. **Settings → Central**
+  says how many requests have been carried out, refused or failed, and
+  shows the last one that could not be trusted.
+- `define( 'MAILHOUSE_CENTRAL_READ_ONLY', true );` in `wp-config.php` makes
+  this site refuse every request. It goes on reporting and sending its own
+  changes, and nothing here can be changed from the centre.
+
+Sending campaigns from the centre comes in a later version.
 
 ## Technical summary
 
@@ -144,7 +170,7 @@ yet.
 - **No build step.** No npm, no Composer, no bundler — what is in `assets/` is
   what the browser gets, and the block is plain `createElement`.
 - **No external requests** except to the mail provider you configured.
-- Six tables, one option. Nothing in `wp_postmeta` except the emails' own
+- Seven tables, one option. Nothing in `wp_postmeta` except the emails' own
   settings.
 - Delivery works by substituting a `PHPMailer` subclass, so everything
   WordPress and other plugins do to a message still happens — `phpmailer_init`,
@@ -157,7 +183,7 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 59 files | pass |
+| PHP lint, 74 files, tests included | pass |
 | `tests/test-core.php` — 78 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
@@ -169,6 +195,7 @@ mocks.
 | `tests/test-central.php` — 109 assertions | pass |
 | `tests/test-central-sync.php` — 142 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
+| `tests/test-central-commands.php` — 128 assertions, one of them over 4,000 random steps | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

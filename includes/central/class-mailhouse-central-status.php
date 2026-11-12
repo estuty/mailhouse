@@ -19,8 +19,9 @@ class Mailhouse_Central_Status {
 	/**
 	 * What this version of the connector can do, as the centre names it.
 	 *
-	 * Empty for now: this version registers and reports in, and nothing
-	 * else. Synchronisation (`sync.v1`) is the next step.
+	 * `sync.v1`: this site's changes are sent to the centre. `reconcile.v1`:
+	 * the two copies can be compared. `subscribers.commands.v1`: this site
+	 * carries out what the centre asks of its subscribers and tags.
 	 *
 	 * @return string[]
 	 */
@@ -30,7 +31,15 @@ class Mailhouse_Central_Status {
 		 *
 		 * @param string[] $capabilities Capability names.
 		 */
-		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', array( 'sync.v1', 'reconcile.v1' ) ), 'is_string' ) );
+		$capabilities = array( 'sync.v1', 'reconcile.v1' );
+
+		// Announced only by a site that will do what it is asked. A site
+		// that does not announce it is never offered a command.
+		if ( Mailhouse_Central_Commands::accepting() ) {
+			$capabilities[] = Mailhouse_Central_Commands::CAPABILITY;
+		}
+
+		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', $capabilities ), 'is_string' ) );
 	}
 
 	/**
@@ -46,7 +55,7 @@ class Mailhouse_Central_Status {
 		$site_mailer      = (string) mailhouse_option( 'mailer', 'php' );
 		$campaign_mailer  = (string) mailhouse_option( 'campaign_mailer', '' );
 		$provider         = Mailhouse_Mailer::provider( $site_mailer );
-		$error            = (string) $state['last_error'];
+		$error            = '' !== (string) $state['last_error'] ? (string) $state['last_error'] : (string) $state['command_error'];
 
 		return array(
 			'site_url_hash'  => Mailhouse_Central_Protocol::site_url_hash( (string) $site_url ),
@@ -71,6 +80,7 @@ class Mailhouse_Central_Status {
 			),
 			'outbox'         => Mailhouse_Central_Sync::report(),
 			'sync'           => Mailhouse_Central_Reconcile::report(),
+			'inbox'          => Mailhouse_Central_Commands::report(),
 			'queue'          => self::queue(),
 			'subscribers'    => array(
 				'subscribed'   => (int) $subscribers['subscribed'],

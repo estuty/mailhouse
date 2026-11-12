@@ -1587,7 +1587,7 @@ $push              = Mailhouse_Central_Sync::push();
 $last              = end( MHS_Centre::$events );
 check( 'connected again, it carries on from the number the centre had reached', true === $connected && 1 === $push['sent'] && $received + 1 === $last['seq'] && (int) $back->id === $last['subject']['local_id'] );
 
-check( 'uninstalling removes the outbox table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
+check( 'uninstalling removes the outbox table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
 
 Mailhouse_Central_Identity::disconnect();
 
