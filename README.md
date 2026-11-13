@@ -158,7 +158,9 @@ to somebody who has not confirmed; and to make, rename or delete a tag.
   address is also taken out of the records of what this site sent them: a
   message still waiting to go is dropped, the send records stay for the
   campaign's counts and no longer say whose they were, and the mail log's
-  entries for them are deleted. (Removing somebody from the centre, and
+  entries for them are deleted. Once the centre has been told it is done,
+  the note of that in the outbox no longer says who they were. (Removing
+  somebody from the centre, and
   WordPress's own "Erase Personal Data" on this site, take them off the
   list and leave those records as they are.)
 - What was asked and what became of it is kept in an inbox table: an id, a

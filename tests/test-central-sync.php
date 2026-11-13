@@ -639,6 +639,21 @@ function mhs_rows() {
 }
 
 /**
+ * How many outbox rows say something, in what they would send.
+ *
+ * @param string $text What to look for.
+ * @return int
+ */
+function mhs_mentions( $text ) {
+	global $wpdb;
+
+	$table = Mailhouse_Central_Outbox::table();
+
+	// phpcs:ignore WordPress.DB
+	return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE payload LIKE %s", '%' . $wpdb->esc_like( $text ) . '%' ) );
+}
+
+/**
  * An address nobody else is using.
  */
 function mhs_address( $name = 'reader' ) {
@@ -843,6 +858,7 @@ $sent = MHS_Centre::$events[41];
 check( 'saying what happened, to whom, when and why', 'subscriber.created' === $sent['type'] && 'local' === $sent['origin'] && (int) $jane->id === $sent['subject']['local_id'] && $rows[0]['state']['hash'] === $sent['state']['hash'] );
 check( 'with the subscriber’s whole state', $jane->email === $sent['state']['email'] && 'pending' === $sent['state']['status'] && '203.0.113.9' === $sent['state']['signup_ip'] && 'form' === $sent['state']['source'] );
 check( 'the row stays until the centre has it, then goes -- all but the newest', 1 === mhs_rows() && 0 === Mailhouse_Central_Outbox::waiting()['depth'] );
+check( 'and the one that is left keeps its number and not what it said', 0 === mhs_mentions( $jane->email ) && 0 === mhs_mentions( 'hash' ) );
 
 $report = Mailhouse_Central_Status::report();
 check( 'the heartbeat says the outbox is empty and how far the centre has acknowledged', 0 === $report['outbox']['depth'] && 41 === $report['outbox']['last_acked_seq'] && false === $report['outbox']['needs_reconcile'] && null === $report['outbox']['oldest'] );
@@ -1087,6 +1103,7 @@ $mark      = mhs_mark();
 Mailhouse_Subscribers::erase_personal_data( $forgotten->email );
 $event = mhs_one( $mark );
 check( '22. the privacy eraser: deleted, as an erasure', 'subscriber.deleted' === $event['type'] && array( 'last_status' => 'subscribed', 'reason' => 'erasure' ) === $event['data'] && $forgotten->email === $event['state']['email'] );
+check( 'which the outbox holds, with who they were, until the centre has it', mhs_mentions( $forgotten->email ) >= 1 );
 
 // A sign-up by somebody who had left, confirmed by the link they were sent.
 $returning = mhs_subscriber();
@@ -1196,6 +1213,7 @@ $push = Mailhouse_Central_Sync::push();
 check( 'one push sends all of it', $waiting > 40 && $waiting === $push['sent'] && 1 === MHS_Centre::pushes() );
 check( 'every event passes the centre’s schema', array() === MHS_Centre::$invalid, implode( ' | ', array_unique( MHS_Centre::$invalid ) ) );
 check( 'in order, with no number missing', array_keys( MHS_Centre::$events ) === range( 41, 41 + $waiting ) );
+check( 'and now that the centre has it, the outbox does not say who was erased: the row left for its number says nothing', 0 === mhs_mentions( $forgotten->email ) && 0 === mhs_mentions( '@' ) && 1 === mhs_rows() );
 
 $wrong = array();
 

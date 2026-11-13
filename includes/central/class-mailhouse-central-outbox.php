@@ -630,6 +630,11 @@ class Mailhouse_Central_Outbox {
 	 * used twice is the one thing the centre will not accept; one row is
 	 * enough to stop that.
 	 *
+	 * It is left for its number, and not for what it said. Nothing reads a
+	 * row the centre already has, and the last thing a site says about
+	 * somebody who asked to be forgotten is who they were: on a quiet site
+	 * that would sit here until the next sign-up.
+	 *
 	 * @param int $through Remove rows up to and including this id.
 	 * @return void
 	 */
@@ -641,6 +646,8 @@ class Mailhouse_Central_Outbox {
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id <= %d AND id < %d", (int) $through, $highest ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET payload = '' WHERE id <= %d AND payload <> ''", (int) $through ) );
 	}
 
 	/**
