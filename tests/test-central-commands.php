@@ -47,6 +47,8 @@ function mhk_clean() {
 	$wpdb->query( "DELETE FROM {$tags} WHERE name LIKE 'MHK %'" );
 	$wpdb->query( 'DELETE FROM ' . Mailhouse_Install::table( 'outbox' ) );
 	$wpdb->query( 'DELETE FROM ' . Mailhouse_Install::table( 'inbox' ) );
+	$wpdb->query( 'DELETE FROM ' . Mailhouse_Install::table( 'queue' ) . ' WHERE campaign_id >= 990000' );
+	$wpdb->query( 'DELETE FROM ' . Mailhouse_Install::table( 'log' ) . " WHERE subject = 'MHK a newsletter'" );
 	$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like( '_transient_mailhouse_confirm_' ) . '%' ) );
 	$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like( '_transient_timeout_mailhouse_confirm_' ) . '%' ) );
 	// phpcs:enable
@@ -747,6 +749,110 @@ $data                    = $events ? json_decode( $events[0]->payload, true ) : 
 check( 'subscriber.delete (erase) removes them, and the event says it is an erasure', null === mhk_row( $dave ) && $events && 'erasure' === $data['data']['reason'] && mhk_is( $answer, 'applied' ) );
 list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $dave, 'mode' => 'erase' ) );
 check( 'somebody already gone: carried out as nothing', mhk_is( $answer, 'applied', array( 'noop' => true ) ) );
+// To be forgotten is more than to be taken off the list: the records of
+// what this site sent them still say who they were.
+$erin       = mhk_person( 'erin' );
+$fred       = mhk_person( 'fred' );
+$gina       = mhk_person( 'gina' );
+$erin_email = (string) mhk_row( $erin )->email;
+$fred_email = (string) mhk_row( $fred )->email;
+$gina_email = (string) mhk_row( $gina )->email;
+$queue      = Mailhouse_Install::table( 'queue' );
+$log        = Mailhouse_Install::table( 'log' );
+$sent_row   = static function ( $campaign, $id, $email, $status, $error = null ) use ( $wpdb, $queue ) {
+	// phpcs:ignore WordPress.DB
+	$wpdb->insert(
+		$queue,
+		array(
+			'campaign_id'   => $campaign,
+			'subscriber_id' => $id,
+			'email'         => $email,
+			'status'        => $status,
+			'error'         => $error,
+			'scheduled_at'  => '2026-01-01 00:00:00',
+		)
+	);
+};
+$logged     = static function ( $id, $to ) use ( $wpdb, $log ) {
+	// phpcs:ignore WordPress.DB
+	$wpdb->insert(
+		$log,
+		array(
+			'created_at'    => '2026-01-01 00:00:00',
+			'status'        => 'sent',
+			'to_email'      => $to,
+			'subject'       => 'MHK a newsletter',
+			'body'          => 'Dear reader',
+			'subscriber_id' => $id,
+		)
+	);
+};
+$queue_of   = static function ( $id ) use ( $wpdb, $queue ) {
+	// phpcs:ignore WordPress.DB
+	return (array) $wpdb->get_results( $wpdb->prepare( "SELECT campaign_id, email, status, error FROM {$queue} WHERE subscriber_id = %d ORDER BY campaign_id", $id ), ARRAY_A );
+};
+$log_of     = static function ( $id, $email ) use ( $wpdb, $log ) {
+	// phpcs:ignore WordPress.DB
+	return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$log} WHERE subject = 'MHK a newsletter' AND ( subscriber_id = %d OR to_email = %s )", $id, $email ) );
+};
+
+$sent_row( 990001, $erin, $erin_email, 'sent' );
+$sent_row( 990002, $erin, $erin_email, 'failed', "550 5.1.1 <{$erin_email}> no such user" );
+$sent_row( 990003, $erin, $erin_email, 'sending' );
+$sent_row( 990001, $fred, $fred_email, 'sent' );
+$logged( $erin, $erin_email );
+$logged( 0, $erin_email );
+$logged( $fred, $fred_email );
+
+list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $erin, 'mode' => 'erase' ) );
+check(
+	'an erasure takes their address out of the records of what they were sent, and keeps the counts',
+	null === mhk_row( $erin ) && $queue_of( $erin ) === array(
+		array(
+			'campaign_id' => '990001',
+			'email'       => '',
+			'status'      => 'sent',
+			'error'       => null,
+		),
+		array(
+			'campaign_id' => '990002',
+			'email'       => '',
+			'status'      => 'failed',
+			'error'       => null,
+		),
+	)
+);
+check( 'drops a message to them that was still on its way out', ! in_array( '990003', array_column( $queue_of( $erin ), 'campaign_id' ), true ) );
+check( 'and removes the mail log’s entries for them, whether logged against them or only their address', 0 === $log_of( $erin, $erin_email ) );
+check( 'saying how much it cleared', mhk_is( $answer, 'applied', array( 'queue' => 3, 'log' => 2, 'events' => 1 ) ) );
+check(
+	'somebody else’s records are exactly as they were',
+	$queue_of( $fred ) === array(
+		array(
+			'campaign_id' => '990001',
+			'email'       => $fred_email,
+			'status'      => 'sent',
+			'error'       => null,
+		),
+	) && 1 === $log_of( $fred, $fred_email )
+);
+// phpcs:ignore WordPress.DB
+check( 'the address is nowhere left in either table', 0 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT ( SELECT COUNT(*) FROM {$queue} WHERE email = %s OR error LIKE %s ) + ( SELECT COUNT(*) FROM {$log} WHERE to_email LIKE %s )", $erin_email, '%' . $wpdb->esc_like( $erin_email ) . '%', '%' . $wpdb->esc_like( $erin_email ) . '%' ) ) );
+
+// Removed is not forgotten: the records keep saying who it was.
+list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $fred, 'mode' => 'remove' ) );
+check( 'a removal leaves the records of what they were sent as they are', null === mhk_row( $fred ) && $fred_email === $queue_of( $fred )[0]['email'] && 1 === $log_of( $fred, $fred_email ) && mhk_is( $answer, 'applied' ) && ! isset( $answer['result']['queue'] ) );
+
+// Somebody the list lost some other way, and is then to be forgotten.
+$sent_row( 990004, $gina, $gina_email, 'sent' );
+$logged( $gina, $gina_email );
+Mailhouse_Subscribers::delete( array( $gina ) );
+list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $gina, 'mode' => 'erase' ) );
+check( 'somebody already off the list is still forgotten, by their number', mhk_is( $answer, 'applied', array( 'queue' => 1, 'log' => 1 ) ) && '' === $queue_of( $gina )[0]['email'] && 0 === $log_of( $gina, $gina_email ) );
+list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $gina, 'mode' => 'erase' ) );
+check( 'and a second time there is nothing left to do', mhk_is( $answer, 'applied', array( 'noop' => true ) ) );
+check( 'forgetting nobody in particular touches nothing', array( 'queue' => 0, 'log' => 0 ) === Mailhouse_Central_Commands::forget( 0, '' ) );
+
 list( , $answer ) = mhk_do( 'subscriber.delete', array( 'local_id' => $bob, 'mode' => 'everything' ) );
 check( 'a way of deleting nobody defined is refused', mhk_row( $bob ) && mhk_is( $answer, 'rejected', array( 'reason' => 'malformed' ) ) );
 

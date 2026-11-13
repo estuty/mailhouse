@@ -154,6 +154,13 @@ to somebody who has not confirmed; and to make, rename or delete a tag.
   once, however many times it arrives. A change to a name or fields is
   refused if the subscriber has changed here since the centre last saw
   them.
+- **A request to forget somebody goes further than removing them.** Their
+  address is also taken out of the records of what this site sent them: a
+  message still waiting to go is dropped, the send records stay for the
+  campaign's counts and no longer say whose they were, and the mail log's
+  entries for them are deleted. (Removing somebody from the centre, and
+  WordPress's own "Erase Personal Data" on this site, take them off the
+  list and leave those records as they are.)
 - What was asked and what became of it is kept in an inbox table: an id, a
   kind and an outcome, nothing about any subscriber. **Settings → Central**
   says how many requests have been carried out, refused or failed, and
@@ -195,7 +202,7 @@ mocks.
 | `tests/test-central.php` — 109 assertions | pass |
 | `tests/test-central-sync.php` — 142 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
-| `tests/test-central-commands.php` — 128 assertions, one of them over 4,000 random steps | pass |
+| `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

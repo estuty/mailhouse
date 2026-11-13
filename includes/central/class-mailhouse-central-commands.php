@@ -955,13 +955,73 @@ class Mailhouse_Central_Commands {
 
 		$subscriber = self::subscriber( $payload );
 
-		if ( ! $subscriber ) {
+		if ( $subscriber ) {
+			Mailhouse_Subscribers::delete( array( (int) $subscriber->id ), 'erase' === $mode ? 'erasure' : 'central' );
+		}
+
+		if ( 'erase' !== $mode ) {
+			return array( 'applied', $subscriber ? array() : array( 'noop' => true ) );
+		}
+
+		// To be forgotten is more than to be taken off the list. The list
+		// may have lost them already, and the records of what they were
+		// sent still say who they were.
+		$cleared = self::forget( self::id_from( $payload ), $subscriber ? (string) $subscriber->email : '' );
+
+		if ( ! $subscriber && ! array_sum( $cleared ) ) {
 			return array( 'applied', array( 'noop' => true ) );
 		}
 
-		Mailhouse_Subscribers::delete( array( (int) $subscriber->id ), 'erase' === $mode ? 'erasure' : 'central' );
+		return array( 'applied', $cleared );
+	}
 
-		return array( 'applied', array() );
+	/**
+	 * Take a person out of what this site recorded about the mail it sent
+	 * them: a request to be forgotten, carried out from the centre.
+	 *
+	 * The send records stay, because a campaign's counts are made of them,
+	 * but no longer say whose they were. A message still waiting to go, or
+	 * half-way out, is dropped. The mail log's entries for them go
+	 * altogether: a log entry is the address, the subject and the message.
+	 *
+	 * Found by the subscriber's number, so it works for somebody the list
+	 * has already lost, and by the address where that is known.
+	 *
+	 * @param int    $id    The subscriber's id on this site.
+	 * @param string $email Their address, or '' if the row has gone.
+	 * @return array{queue:int,log:int} How many records of each kind were dealt with.
+	 */
+	public static function forget( $id, $email = '' ) {
+		global $wpdb;
+
+		$id    = (int) $id;
+		$email = (string) $email;
+		$done  = array(
+			'queue' => 0,
+			'log'   => 0,
+		);
+
+		if ( $id <= 0 ) {
+			return $done;
+		}
+
+		$queue = Mailhouse_Install::table( 'queue' );
+		$log   = Mailhouse_Install::table( 'log' );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status IN ('pending', 'sending')", $id ) );
+		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET email = '', error = NULL WHERE subscriber_id = %d AND ( email <> '' OR error IS NOT NULL )", $id ) );
+
+		if ( '' !== $email ) {
+			// The address alone as well: a confirmation message is logged
+			// before there is a subscriber to log it against.
+			$done['log'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$log} WHERE subscriber_id = %d OR to_email = %s", $id, $email ) );
+		} else {
+			$done['log'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$log} WHERE subscriber_id = %d", $id ) );
+		}
+		// phpcs:enable
+
+		return $done;
 	}
 
 	/**
