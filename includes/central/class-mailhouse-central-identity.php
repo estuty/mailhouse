@@ -574,6 +574,10 @@ class Mailhouse_Central_Identity {
 				)
 		);
 
+		// A campaign the centre handed over is not sent by a site that is
+		// no longer the centre's.
+		Mailhouse_Central_Campaigns::disconnected();
+
 		delete_option( self::OPTION );
 		self::$state = null;
 

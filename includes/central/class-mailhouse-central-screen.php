@@ -566,6 +566,7 @@ class Mailhouse_Central_Screen {
 				/* translators: %s: what the centre said. */
 				? sprintf( __( 'not kept: %s', 'mailhouse' ), $state['template_error'] )
 				: $this->when( $state['template_published_at'] ),
+			__( 'Newsletters sent for the centre', 'mailhouse' ) => $this->campaigns(),
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);
@@ -602,5 +603,36 @@ class Mailhouse_Central_Screen {
 			<?php esc_html_e( 'Disconnecting removes this site’s key and stops everything the connector does. Subscribers, tags, campaigns and mail settings are not touched. The website’s history stays at the centre, and it can be connected again with a new token.', 'mailhouse' ); ?>
 		</p>
 		<?php
+	}
+
+	/**
+	 * The campaigns the centre has handed to this site, in a line.
+	 *
+	 * @return string
+	 */
+	protected function campaigns() {
+		$counts = Mailhouse_Central_Campaigns::counts();
+
+		if ( ! $counts ) {
+			return __( 'none', 'mailhouse' );
+		}
+
+		$labels = array(
+			'preparing' => __( 'fetching recipients', 'mailhouse' ),
+			'ready'     => __( 'ready, waiting for the time', 'mailhouse' ),
+			'sending'   => __( 'being sent', 'mailhouse' ),
+			'completed' => __( 'finished', 'mailhouse' ),
+			'cancelled' => __( 'called off', 'mailhouse' ),
+			'failed'    => __( 'not sent: could not be prepared', 'mailhouse' ),
+		);
+		$parts  = array();
+
+		foreach ( $labels as $state => $label ) {
+			if ( ! empty( $counts[ $state ] ) ) {
+				$parts[] = number_format_i18n( $counts[ $state ] ) . ' ' . $label;
+			}
+		}
+
+		return implode( '; ', $parts );
 	}
 }

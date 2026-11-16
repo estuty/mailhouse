@@ -155,6 +155,22 @@ check( 'subject merged', 'Issue for Ada' === $message['subject'], $message['subj
 check( 'body wrapped in the template', false !== strpos( $message['html'], '<!DOCTYPE' ) );
 check( 'unsubscribe link in the footer', false !== strpos( $message['html'], $subscriber->manage_key ) );
 check( 'plain text alternative generated', false !== strpos( $message['text'], 'Hello Ada' ), $message['text'] );
+check( 'a link in the body is written out in the text part', false !== strpos( $message['text'], 'read this <https://example.com/post>.' ), $message['text'] );
+check( 'and so is the unsubscribe link', false !== strpos( $message['text'], '<' . $unsub . '>' ), substr( $message['text'], -300 ) );
+
+$as_text = mailhouse_html_to_text(
+	'<html><head><style>a{color:red}</style><title>T</title></head><body>'
+	. '<h1>News</h1><p>One <a href="https://example.com/a?x=1&amp;y=2">first</a> and <a class="b" href=\'mailto:hi@example.com\'>write</a>.</p>'
+	. '<ul><li>Item</li></ul><p><a href="https://example.com/img"><img src="x.png" alt="pic" /></a> <a>no address</a> 2 &lt; 3 %%mailhouse-link-9%%</p>'
+	. '<script>alert(1)</script></body></html>'
+);
+check( 'each link is written after its text, with its address as it was', false !== strpos( $as_text, 'One first <https://example.com/a?x=1&y=2> and write <mailto:hi@example.com>.' ), $as_text );
+check( 'a link around a picture leaves its address', false !== strpos( $as_text, '<https://example.com/img>' ), $as_text );
+check( 'no tag, style or script is left, and text that looks like a tag is kept', false === strpos( $as_text, '<h1' ) && false === strpos( $as_text, 'color:red' ) && false === strpos( $as_text, 'alert' ) && false !== strpos( $as_text, '2 < 3' ) && false !== strpos( $as_text, '- Item' ), $as_text );
+check( 'the place a link is kept cannot be forged into one', false === strpos( $as_text, '%%mailhouse-link' ), $as_text );
+
+$confirmation = Mailhouse_Emails::render( Mailhouse_Emails::get_automation( 'confirmation' ), $subscriber );
+check( 'the confirmation email’s text part carries the link to confirm with', false !== strpos( $confirmation['text'], '<' . Mailhouse_Optin::confirm_url( $subscriber ) . '>' ), substr( $confirmation['text'], 0, 400 ) );
 
 $queued = Mailhouse_Queue::enqueue_campaign( $campaign );
 check( 'campaign queued for the subscriber', $queued >= 1, "queued: $queued" );

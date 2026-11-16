@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.4.0';
+	const DB_VERSION = '1.5.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -176,6 +176,7 @@ class Mailhouse_Install {
 				provider_message_id varchar(191) DEFAULT NULL,
 				remote_job_id char(36) DEFAULT NULL,
 				reported tinyint(3) unsigned NOT NULL DEFAULT 0,
+				attempt_started_at datetime DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY campaign_subscriber (campaign_id,subscriber_id),
 				UNIQUE KEY remote_job (remote_job_id),
@@ -250,6 +251,47 @@ class Mailhouse_Install {
 			) {$collate};"
 		);
 
+		// Campaigns written in a Mailhouse Central installation and sent by
+		// this site: what each says, where to stop, and how far fetching its
+		// recipients has got. The recipients themselves are rows of the
+		// queue, like anybody else's. Empty on a site that is not connected.
+		$remote = self::table( 'remote_campaigns' );
+		dbDelta(
+			"CREATE TABLE {$remote} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				execution_id char(36) NOT NULL,
+				campaign_id char(36) NOT NULL,
+				post_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				name varchar(191) NOT NULL DEFAULT '',
+				subject text NOT NULL,
+				preheader text NOT NULL,
+				body_html longtext NOT NULL,
+				body_text longtext NOT NULL,
+				content_hash char(64) NOT NULL,
+				recipient_count int(10) unsigned NOT NULL DEFAULT 0,
+				recipients_hash char(64) NOT NULL,
+				fields text NOT NULL,
+				start_at datetime NOT NULL,
+				deadline_at datetime NOT NULL,
+				state varchar(20) NOT NULL DEFAULT 'preparing',
+				fetch_after bigint(20) unsigned NOT NULL DEFAULT 0,
+				fetched tinyint(1) NOT NULL DEFAULT 0,
+				unknown longtext NOT NULL,
+				unknown_count int(10) unsigned NOT NULL DEFAULT 0,
+				error text DEFAULT NULL,
+				reported_state varchar(20) NOT NULL DEFAULT '',
+				reported_at int(10) unsigned NOT NULL DEFAULT 0,
+				next_at int(10) unsigned NOT NULL DEFAULT 0,
+				started_at datetime DEFAULT NULL,
+				created_at datetime NOT NULL,
+				updated_at datetime NOT NULL,
+				PRIMARY KEY  (id),
+				UNIQUE KEY execution_id (execution_id),
+				KEY post_id (post_id),
+				KEY state (state)
+			) {$collate};"
+		);
+
 		self::seed_defaults();
 
 		// Added in 1.1.0, so it runs on upgrades too, not just new installs.
@@ -306,7 +348,7 @@ class Mailhouse_Install {
 	public static function drop_tables() {
 		global $wpdb;
 
-		foreach ( array( 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
+		foreach ( array( 'remote_campaigns', 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
 			$table = self::table( $name );
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery

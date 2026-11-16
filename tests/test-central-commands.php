@@ -597,7 +597,7 @@ $inbox   = Mailhouse_Install::table( 'inbox' );
 $columns = (array) $wpdb->get_col( "SHOW COLUMNS FROM {$inbox}" ); // phpcs:ignore WordPress.DB
 check( 'the inbox table exists, and holds no column a subscriber could be in', array( 'id', 'command_id', 'seq', 'type', 'status', 'result', 'received_at', 'acked' ) === $columns, implode( ',', $columns ) );
 check( 'a command id can be written down only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$inbox} WHERE Key_name = 'command_id' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
-check( 'the schema version is 1.4.0', '1.4.0' === Mailhouse_Install::DB_VERSION );
+check( 'the schema version is 1.5.0', '1.5.0' === Mailhouse_Install::DB_VERSION );
 
 $handler = (string) file_get_contents( dirname( __DIR__ ) . '/includes/central/class-mailhouse-central-commands.php' ); // phpcs:ignore
 check( 'nothing a command says chooses what is called: each kind is spelled out with its one function', false === strpos( $handler, 'call_user_func' ) && false === strpos( $handler, 'eval(' ) && 0 === preg_match( '/\$[a-z_]+\s*\(/', $handler ) && count( Mailhouse_Central_Commands::TYPES ) === preg_match_all( "/^\t\t\tcase '[a-z_.]+':\r?$/m", $handler ) );
@@ -1517,6 +1517,6 @@ define( 'MAILHOUSE_CENTRAL_READ_ONLY', true );
 check( 'with MAILHOUSE_CENTRAL_READ_ONLY set, commands are refused and the capability is not announced', ! Mailhouse_Central_Commands::accepting() && ! in_array( 'subscribers.commands.v1', Mailhouse_Central_Status::capabilities(), true ) );
 
 // Read, not run: running it would drop this site's tables.
-check( 'uninstalling removes the inbox table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
+check( 'uninstalling removes the inbox table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'remote_campaigns', 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
 
 mailhouse_test_results();

@@ -67,6 +67,10 @@ class Mailhouse_Central {
 		// And a change to its design is noticed.
 		Mailhouse_Central_Template::listen();
 
+		// Campaigns the centre has handed to this site: started on time,
+		// stopped at their deadline, and their recipients fetched.
+		Mailhouse_Central_Campaigns::listen();
+
 		// Before the queue (priority 10), so that what the centre says is
 		// known before anything is sent.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'tick' ), 5 );

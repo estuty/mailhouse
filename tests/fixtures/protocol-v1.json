@@ -1091,8 +1091,149 @@
       "payload_json": "{}",
       "key_id": "p-test",
       "signature": "W0QbLBNKrUbO9jxK7XsYxA7uUN+VZT+fviNP2Wt6s6x5IY27LxNjIslcQTrgv9MczIz3hxjKqnC+/Y/UzMFOAw=="
+    },
+    {
+      "name": "a campaign handed over",
+      "key": "platform",
+      "message": "MH1-CMD\n0193a1b2-c3d4-7e5f-8a9b-000000000405\n0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b\n405\ncampaign.prepare\n2026-11-17T08:45:00Z\n2026-11-20T09:00:00Z\nb3e64e44f970def56ebb07461f163af63fba3631d6201143eeed040a2ecc0c06",
+      "id": "0193a1b2-c3d4-7e5f-8a9b-000000000405",
+      "website_id": "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      "seq": 405,
+      "type": "campaign.prepare",
+      "issued_at": "2026-11-17T08:45:00Z",
+      "expires_at": "2026-11-20T09:00:00Z",
+      "payload_json": "{\"execution_id\":\"0193a1b2-c3d4-7e5f-8a9b-0000000e0001\",\"campaign_id\":\"0193a1b2-c3d4-7e5f-8a9b-0000000c0001\",\"name\":\"November\",\"subject\":\"November news\",\"preheader\":\"What happened this month\",\"body_html\":\"<h1>Hello {{first_name|there}}</h1><p>News.</p>\",\"body_text\":\"HELLO {{first_name|there}}\\n\\nNews.\",\"content_hash\":\"b36b7b1eace288349fc97336988982de5113e85958a9a0cae6b434ca747c4391\",\"recipient_count\":4,\"recipients_hash\":\"316680f465163b382d7b7528bec3599e724fd28cfe358ba9f0b99c13ab26dbda\",\"start_at\":\"2026-11-17T09:00:00Z\",\"deadline\":\"2026-11-20T09:00:00Z\",\"fields\":[\"company\"],\"track_opens\":true,\"track_clicks\":true}",
+      "key_id": "p-test",
+      "signature": "CbXCls3MlVtdyukE4CZBe1FDeXducMFnNmD4V80gddiFs4pS4qvuKUNiHhlN+lifK6zpcDaoN3csO3TLZXMjAQ=="
     }
   ],
+  "campaigns": {
+    "content": [
+      {
+        "name": "an ordinary newsletter",
+        "subject": "November news",
+        "preheader": "What happened this month",
+        "body_html": "<h1>Hello {{first_name|there}}</h1><p>News.</p>",
+        "body_text": "HELLO {{first_name|there}}\n\nNews.",
+        "hash": "b36b7b1eace288349fc97336988982de5113e85958a9a0cae6b434ca747c4391"
+      },
+      {
+        "name": "nothing but a subject",
+        "subject": "x",
+        "preheader": "",
+        "body_html": "",
+        "body_text": "",
+        "hash": "0fe2ab1d40df4f0a90296fecbb1f4fb73afa9bab217db7d1e5c8b2b8a4081212"
+      },
+      {
+        "name": "characters of more than one byte, counted in bytes",
+        "subject": "Zoë’s café — 日本語 🎉",
+        "preheader": "Größe",
+        "body_html": "<p>Ünïcödé — 日本語 🎉</p>",
+        "body_text": "Ünïcödé — 日本語 🎉",
+        "hash": "d560b5813ec211098c6e26d9e0963e15826a5f56b5f2fea625e9e3b6a3962d40"
+      },
+      {
+        "name": "line feeds and carriage returns inside the fields",
+        "subject": "one",
+        "preheader": "two\n3:abc",
+        "body_html": "<p>a</p>\r\n<p>b</p>\n",
+        "body_text": "a\n\nb\n",
+        "hash": "6f39d4ab2b9fe61dc60de616316a36d2f61146caab32575a85739de9e4906516"
+      },
+      {
+        "name": "the same text, with the boundary between two fields moved",
+        "subject": "on",
+        "preheader": "etwo\n3:abc",
+        "body_html": "<p>a</p>\r\n<p>b</p>\n",
+        "body_text": "a\n\nb\n",
+        "hash": "e2bd88f1ec64746e2d6aa7f7cb7944bae818d7614c9f1b0ca20ee25995c9b94a"
+      }
+    ],
+    "recipients": [
+      {
+        "name": "nobody",
+        "recipients": [],
+        "hash": "00bb7fa80b6b84447a94d5f678f1586ebf592beb7f5a03715d44f09fc04f8041"
+      },
+      {
+        "name": "one person",
+        "recipients": [
+          {
+            "local_id": 5521,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000001"
+          }
+        ],
+        "hash": "794377dbcd86cb8d15a71194c2349de16171b66e9f3d73c40fe9f7655964823b"
+      },
+      {
+        "name": "several, in the order of the site’s own ids",
+        "recipients": [
+          {
+            "local_id": 3,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-00000000001e"
+          },
+          {
+            "local_id": 17,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000002"
+          },
+          {
+            "local_id": 5521,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000001"
+          },
+          {
+            "local_id": 5522,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000fa0"
+          }
+        ],
+        "hash": "316680f465163b382d7b7528bec3599e724fd28cfe358ba9f0b99c13ab26dbda"
+      },
+      {
+        "name": "ids are ordered as numbers, not as text",
+        "recipients": [
+          {
+            "local_id": 9,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000009"
+          },
+          {
+            "local_id": 10,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-00000000000a"
+          },
+          {
+            "local_id": 100,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000064"
+          },
+          {
+            "local_id": 4294967296,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000007"
+          }
+        ],
+        "hash": "3d2b5316783f839040a65b03ad697b819c7b23fd033345bc49cc4dce35eeb3b6"
+      },
+      {
+        "name": "the same people with two job ids exchanged",
+        "recipients": [
+          {
+            "local_id": 9,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-00000000000a"
+          },
+          {
+            "local_id": 10,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000009"
+          },
+          {
+            "local_id": 100,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000064"
+          },
+          {
+            "local_id": 4294967296,
+            "job_id": "0193a1b2-c3d4-7e5f-8a9b-000000000007"
+          }
+        ],
+        "hash": "5d7136e5c84b549a24d4865c28d69dbca4b92f99bc7c595b4cad9ac635ffd730"
+      }
+    ]
+  },
   "tampered_commands": [
     {
       "name": "a command with a payload",

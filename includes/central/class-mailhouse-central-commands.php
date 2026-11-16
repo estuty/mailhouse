@@ -89,6 +89,7 @@ class Mailhouse_Central_Commands {
 		'tag.rename',
 		'tag.delete',
 		'site.reconcile',
+		'campaign.prepare',
 	);
 
 	/**
@@ -374,7 +375,7 @@ class Mailhouse_Central_Commands {
 	 * @return bool
 	 */
 	protected static function changes( $type ) {
-		return ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile' ), true );
+		return ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile', 'campaign.prepare' ), true );
 	}
 
 	/**
@@ -427,6 +428,8 @@ class Mailhouse_Central_Commands {
 				return self::tag_delete( $payload );
 			case 'site.reconcile':
 				return self::reconcile();
+			case 'campaign.prepare':
+				return Mailhouse_Central_Campaigns::prepare( $payload );
 		}
 
 		return self::refuse( 'unsupported' );
@@ -1009,7 +1012,10 @@ class Mailhouse_Central_Commands {
 		$log   = Mailhouse_Install::table( 'log' );
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status IN ('pending', 'sending')", $id ) );
+		// What a campaign from the centre holds for them stays, as not
+		// sent, and loses the address with every other row below.
+		$done['queue'] += Mailhouse_Queue::withdraw_remote( $id, __( 'No longer on the list.', 'mailhouse' ) );
+		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status IN ('pending', 'sending') AND remote_job_id IS NULL", $id ) );
 		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET email = '', error = NULL WHERE subscriber_id = %d AND ( email <> '' OR error IS NOT NULL )", $id ) );
 
 		if ( '' !== $email ) {

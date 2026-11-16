@@ -502,8 +502,10 @@ class Mailhouse_Subscribers {
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$pivot} WHERE subscriber_id IN ({$placeholders})", $ids ) );
+		// What a campaign from the centre holds for them is kept, as not sent.
+		Mailhouse_Queue::withdraw_remote( $ids, __( 'No longer on the list.', 'mailhouse' ) );
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id IN ({$placeholders}) AND status = 'pending'", $ids ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id IN ({$placeholders}) AND status = 'pending' AND remote_job_id IS NULL", $ids ) );
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$deleted = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id IN ({$placeholders})", $ids ) );
 
@@ -728,9 +730,13 @@ class Mailhouse_Subscribers {
 
 		$queue = Mailhouse_Install::table( 'queue' );
 
+		// What a campaign from the centre holds for them is kept, as not
+		// sent: the centre counted it and is owed an answer.
+		Mailhouse_Queue::withdraw_remote( (int) $subscriber_id );
+
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
-			$wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status = 'pending'", (int) $subscriber_id )
+			$wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status = 'pending' AND remote_job_id IS NULL", (int) $subscriber_id )
 		);
 	}
 

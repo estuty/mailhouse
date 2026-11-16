@@ -188,7 +188,49 @@ are each subscriber's own. Nothing about any subscriber is in it.
 - A centre from before this answers that it has no such address. Nothing
   is wrong, and the site asks again a day later.
 
-Sending campaigns from the centre comes in a later version.
+**Newsletters written at the centre.** A newsletter can be written in the
+centre's dashboard and sent by this site: in this site's template, through
+this site's mail transport, at this site's own pace, to this site's own
+subscribers. A site is handed one only once an administrator of the centre
+has allowed requests to this website, and only if this version of the
+plugin is installed.
+
+- What arrives is a signed request, checked like any other, carrying the
+  subject and the body and the hash that names them. The body is cleaned
+  again here, by WordPress's own filter and a list of what an email may
+  contain. Nothing in it is run: a shortcode or a block in it arrives as
+  the text it was written as.
+- Who it goes to is fetched from the centre as this site's own subscriber
+  numbers, never addresses. When they are all here they are counted and
+  hashed, and nothing is sent unless both agree with what the signed
+  request said. Somebody the centre lists and this site does not hold is
+  not guessed at.
+- It starts at the time the centre set, by this site's own clock, whether
+  or not the centre can be reached at that moment, and stops at its
+  deadline (three days later): a site that was away for a week does not
+  come back and send last week's newsletter.
+- **This site's rules still decide who is written to.** At the moment each
+  message goes, the subscriber must be subscribed here. Somebody who
+  unsubscribes after the centre made its list is skipped. Every message
+  carries this site's unsubscribe link and headers, and its plain-text
+  part has every link written out.
+- **A message that may have gone is never sent again.** If the transport
+  does not say whether it took a message, or the process sending it dies
+  after handing it over, the message is held as *uncertain*. The backup
+  transport is not used for these messages. Your own campaigns behave
+  exactly as before: an unclear result is retried, and the backup takes
+  over.
+- It appears among **Mailhouse → Emails**, labelled *From Mailhouse
+  Central*, with its progress. It cannot be edited, re-sent or given other
+  recipients here. **You can pause it, resume it or call it off**; what was
+  not sent is kept as a record, and the centre is told when you call it off.
+- A copy of this site at another address (a staging copy, say) sends none
+  of it. Disconnecting from the centre calls off whatever of the centre's
+  has not been sent.
+
+Not yet: the centre is told how far a newsletter has got, but not what
+became of each message; and it cannot pause or call one off once this site
+has collected it. Both come in the next version.
 
 ## Technical summary
 
@@ -196,7 +238,7 @@ Sending campaigns from the centre comes in a later version.
 - **No build step.** No npm, no Composer, no bundler — what is in `assets/` is
   what the browser gets, and the block is plain `createElement`.
 - **No external requests** except to the mail provider you configured.
-- Seven tables, one option. Nothing in `wp_postmeta` except the emails' own
+- Eight tables, one option. Nothing in `wp_postmeta` except the emails' own
   settings.
 - Delivery works by substituting a `PHPMailer` subclass, so everything
   WordPress and other plugins do to a message still happens — `phpmailer_init`,
@@ -209,8 +251,8 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 75 files, tests included | pass |
-| `tests/test-core.php` — 78 assertions | pass |
+| PHP lint, 77 files, tests included | pass |
+| `tests/test-core.php` — 85 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
 | `tests/test-features.php` — 80 assertions | pass |
@@ -222,6 +264,7 @@ mocks.
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
+| `tests/test-central-campaigns.php` — 168 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |
@@ -248,6 +291,12 @@ Three bugs found this way and fixed: `wp_mail()` rejected the sender before
 signup regenerated the confirmation key while the throttle declined to send a
 replacement, leaving a dead link in somebody's inbox; and the tracking pixel
 declared a `Content-Length` one byte too long.
+
+A fourth, found later by reading a delivered message on the central
+application's test rig: the plain-text part of every email had no links in
+it, the unsubscribe link among them. The converter wrote each as
+`text <address>` and then removed it with the tags. Links are now set aside
+before the tags go and put back afterwards.
 
 ## Licence
 

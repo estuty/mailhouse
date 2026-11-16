@@ -304,6 +304,12 @@ class Mailhouse_Emails {
 	 * @return void
 	 */
 	public function send_box( $post ) {
+		if ( Mailhouse_Central_Campaigns::is_central( $post->ID ) ) {
+			Mailhouse_Central_Campaigns::panel( $post );
+
+			return;
+		}
+
 		$type       = self::type( $post );
 		$status     = self::status( $post );
 		$recipients = get_post_meta( $post->ID, '_mailhouse_tag', true );
@@ -482,6 +488,14 @@ class Mailhouse_Emails {
 		}
 
 		if ( ! mailhouse_can_manage() ) {
+			return;
+		}
+
+		// The record of a newsletter from the centre has nothing to save:
+		// its subject, its recipients and its time are the centre's. Above
+		// all it must not be turned into one of this site's own automated
+		// emails, which would send the centre's words to new subscribers.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
 			return;
 		}
 
@@ -777,17 +791,41 @@ class Mailhouse_Emails {
 			}
 		}
 
-		$subject = (string) get_post_meta( $post->ID, '_mailhouse_subject', true );
-		$subject = '' !== $subject ? $subject : get_the_title( $post );
-		$subject = Mailhouse_Merge_Tags::render( $subject, $context );
+		if ( Mailhouse_Central_Campaigns::is_central( $post->ID ) ) {
+			// A newsletter written at the centre. Its subject and body are
+			// what the connector keeps, not what this post holds; the body
+			// is finished HTML and is never run as blocks or shortcodes.
+			// Everything after this point is what any email gets.
+			$central = Mailhouse_Central_Campaigns::content( $post->ID );
 
-		$content = (string) $post->post_content;
-		$content = do_blocks( $content );
-		$content = do_shortcode( $content );
-		$content = wpautop( $content );
-		$content = Mailhouse_Merge_Tags::render( $content, $context, 'html' );
+			if ( null === $central ) {
+				return array(
+					'subject' => '',
+					'html'    => '',
+					'text'    => '',
+				);
+			}
 
-		$preview = Mailhouse_Merge_Tags::render( (string) get_post_meta( $post->ID, '_mailhouse_preview', true ), $context );
+			// The custom fields it uses, by name: one this subscriber does
+			// not have is empty for them, and its fallback is used.
+			$context['fields'] = $central['fields'];
+
+			$subject = Mailhouse_Merge_Tags::render( $central['subject'], $context );
+			$content = Mailhouse_Merge_Tags::render( $central['body'], $context, 'html' );
+			$preview = Mailhouse_Merge_Tags::render( $central['preheader'], $context );
+		} else {
+			$subject = (string) get_post_meta( $post->ID, '_mailhouse_subject', true );
+			$subject = '' !== $subject ? $subject : get_the_title( $post );
+			$subject = Mailhouse_Merge_Tags::render( $subject, $context );
+
+			$content = (string) $post->post_content;
+			$content = do_blocks( $content );
+			$content = do_shortcode( $content );
+			$content = wpautop( $content );
+			$content = Mailhouse_Merge_Tags::render( $content, $context, 'html' );
+
+			$preview = Mailhouse_Merge_Tags::render( (string) get_post_meta( $post->ID, '_mailhouse_preview', true ), $context );
+		}
 
 		$html = Mailhouse_Template::wrap(
 			$content,

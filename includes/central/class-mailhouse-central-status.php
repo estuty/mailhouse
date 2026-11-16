@@ -37,6 +37,9 @@ class Mailhouse_Central_Status {
 		// that does not announce it is never offered a command.
 		if ( Mailhouse_Central_Commands::accepting() ) {
 			$capabilities[] = Mailhouse_Central_Commands::CAPABILITY;
+			// A campaign is handed over as a command, so it is taken in
+			// only by a site that takes commands.
+			$capabilities[] = Mailhouse_Central_Campaigns::CAPABILITY;
 		}
 
 		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', $capabilities ), 'is_string' ) );
