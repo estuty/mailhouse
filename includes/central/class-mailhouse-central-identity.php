@@ -111,6 +111,15 @@ class Mailhouse_Central_Identity {
 			'inbox_seq'         => 0,
 			'commands_pending'  => 0,
 			'command_error'     => '',
+			// This site's email template, as the centre holds it: the hash
+			// of the one it has, of one it would not take, when each thing
+			// happened, and what the centre said was wrong.
+			'template_hash'         => '',
+			'template_refused'      => '',
+			'template_published_at' => 0,
+			'template_checked_at'   => 0,
+			'template_next_at'      => 0,
+			'template_error'        => '',
 		);
 	}
 

@@ -171,6 +171,23 @@ to somebody who has not confirmed; and to make, rename or delete a tag.
   this site refuse every request. It goes on reporting and sending its own
   changes, and nothing here can be changed from the centre.
 
+**The site's email template.** A newsletter written at the centre is a
+body; it is this site that wraps it in its header, footer and colours. So
+that the centre can show a campaign as this site would send it, a connected
+site sends the centre its template once: the wrapper alone, with a marked
+place for the body, the subject, the preview text and the two links that
+are each subscriber's own. Nothing about any subscriber is in it.
+
+- It is sent after connecting, and again when the design changes: the
+  plugin's settings, the site's name or its theme. Otherwise the site looks
+  once an hour whether what it would send is still what the centre has.
+- The centre keeps it only as something to look at: anything that could
+  run is taken out there, and a template with no place for a body or no
+  unsubscribe link is refused. **Settings → Central** says when the
+  template was last sent, or why the centre would not keep it.
+- A centre from before this answers that it has no such address. Nothing
+  is wrong, and the site asks again a day later.
+
 Sending campaigns from the centre comes in a later version.
 
 ## Technical summary
@@ -192,7 +209,7 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 74 files, tests included | pass |
+| PHP lint, 75 files, tests included | pass |
 | `tests/test-core.php` — 78 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
@@ -201,8 +218,8 @@ mocks.
 | `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
 | `tests/test-foundations.php` — 158 assertions | pass |
-| `tests/test-central.php` — 109 assertions | pass |
-| `tests/test-central-sync.php` — 142 assertions | pass |
+| `tests/test-central.php` — 136 assertions | pass |
+| `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |

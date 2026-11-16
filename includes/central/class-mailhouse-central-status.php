@@ -31,7 +31,7 @@ class Mailhouse_Central_Status {
 		 *
 		 * @param string[] $capabilities Capability names.
 		 */
-		$capabilities = array( 'sync.v1', 'reconcile.v1' );
+		$capabilities = array( 'sync.v1', 'reconcile.v1', Mailhouse_Central_Template::CAPABILITY );
 
 		// Announced only by a site that will do what it is asked. A site
 		// that does not announce it is never offered a command.

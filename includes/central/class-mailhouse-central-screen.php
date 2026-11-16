@@ -562,6 +562,10 @@ class Mailhouse_Central_Screen {
 			__( 'First copy of the list', 'mailhouse' ) => $copying,
 			__( 'Last compared', 'mailhouse' )          => $comparing,
 			__( 'Changes asked for by the centre', 'mailhouse' ) => $changes,
+			__( 'Email template sent to the centre', 'mailhouse' ) => '' !== (string) $state['template_error']
+				/* translators: %s: what the centre said. */
+				? sprintf( __( 'not kept: %s', 'mailhouse' ), $state['template_error'] )
+				: $this->when( $state['template_published_at'] ),
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);

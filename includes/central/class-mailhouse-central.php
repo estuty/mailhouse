@@ -64,6 +64,9 @@ class Mailhouse_Central {
 		// From here on, what changes on this site is written down for the centre.
 		Mailhouse_Central_Outbox::listen();
 
+		// And a change to its design is noticed.
+		Mailhouse_Central_Template::listen();
+
 		// Before the queue (priority 10), so that what the centre says is
 		// known before anything is sent.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'tick' ), 5 );
@@ -123,6 +126,10 @@ class Mailhouse_Central {
 		do {
 			Mailhouse_Central_Sync::push( max( 1, $deadline - time() ) );
 		} while ( time() < $deadline && Mailhouse_Central_Reconcile::work( $deadline ) );
+
+		// Last, and seldom: this site's email template, if the centre does
+		// not have it as it is now.
+		Mailhouse_Central_Template::work( max( 1, min( self::TICK_TIMEOUT, $deadline - time() ) ) );
 	}
 
 	/**

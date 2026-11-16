@@ -49,6 +49,12 @@ final class MHC_Centre {
 	/** @var string How to answer a registration: ok, or an error code. */
 	public static $register = 'ok';
 
+	/** @var string How to answer a template shell: ok, old (a centre from before shells), refuse, or 500. */
+	public static $template = 'ok';
+
+	/** @var array[] Every shell received, as its decoded body. */
+	public static $shells = array();
+
 	/** @var string The token this centre issued. */
 	public static $token = '';
 
@@ -224,6 +230,24 @@ final class MHC_Centre {
 
 		if ( '/api/v1/connector/disconnect' === $path ) {
 			return self::answer( 200, array( 'disconnected' => true ) );
+		}
+
+		if ( '/api/v1/connector/template' === $path ) {
+			if ( 'old' === self::$template ) {
+				return self::answer( 404, array( 'code' => 'not_found' ) );
+			}
+
+			if ( '500' === self::$template ) {
+				return self::answer( 500, array( 'code' => 'internal' ) );
+			}
+
+			if ( 'refuse' === self::$template ) {
+				return self::answer( 422, array( 'code' => 'validation_failed', 'detail' => 'The shell has no unsubscribe link.' ) );
+			}
+
+			self::$shells[] = $request['json'];
+
+			return self::answer( 200, array( 'accepted' => true, 'removed' => 0 ) );
 		}
 
 		switch ( self::$mode ) {
@@ -807,5 +831,158 @@ $screen->render();
 check( 'someone who may not manage the plugin is shown nothing', '' === ob_get_clean() );
 
 mhc_forget();
+
+// ---------------------------------------------------------------------------
+echo "\nThis site's email template\n";
+
+$mhc_template_settings = get_option( 'mailhouse_settings' );
+
+/**
+ * Requests for the template endpoint among those seen, then forget them all.
+ *
+ * @return array[]
+ */
+function mhc_template_requests() {
+	$seen = array_values(
+		array_filter(
+			MHC_Centre::$requests,
+			static function ( $request ) {
+				return '/api/v1/connector/template' === $request['path'];
+			}
+		)
+	);
+
+	MHC_Centre::$requests = array();
+
+	return $seen;
+}
+
+/**
+ * Let the next run look at the template again.
+ */
+function mhc_template_due() {
+	Mailhouse_Central_Identity::update(
+		array(
+			'template_checked_at' => 0,
+			'template_next_at'    => 0,
+		)
+	);
+}
+
+$mhc_home = 'https://shop.example.test';
+MHC_Centre::reset();
+MHC_Centre::$shells   = array();
+MHC_Centre::$template = 'ok';
+mhc_connect();
+mhc_requests();
+
+// A site connected when the plugin loads listens for changes to its design.
+// This one connected a moment ago, so it is told to.
+Mailhouse_Central_Template::listen();
+
+check( 'a connected site announces that it publishes its template', in_array( 'template.v1', Mailhouse_Central_Status::capabilities(), true ) );
+
+$shell = Mailhouse_Central_Template::shell();
+check( 'the shell has one place for the body', 1 === substr_count( $shell, '{{content}}' ) );
+check( 'and one each for the subject, the preview text and the two links', 1 === substr_count( $shell, '{{subject}}' ) && 1 === substr_count( $shell, '{{preheader}}' ) && 1 === substr_count( $shell, 'href="{{unsubscribe_url}}"' ) && 1 === substr_count( $shell, 'href="{{preferences_url}}"' ) );
+check( 'with nothing left of the markers it was made with', false === strpos( $shell, 'MAILHOUSE-SLOT' ) && false === strpos( $shell, 'mailhouse.invalid' ) );
+check( 'it is this site’s own template: its name, its style block, the class the body sits in', false !== strpos( $shell, esc_html( wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) ) ) && false !== strpos( $shell, '<style' ) && false !== strpos( $shell, 'mh-content' ) );
+check( 'and it is the same each time it is made', $shell === Mailhouse_Central_Template::shell() );
+
+$outcome = Mailhouse_Central_Template::work();
+$sent    = mhc_template_requests();
+check( 'the first run sends it, signed, with its hash', 'published' === $outcome && 1 === count( $sent ) && 'PUT' === $sent[0]['method'] && array( true ) === MHC_Centre::$verified && $shell === $sent[0]['json']['shell_html'] && hash( 'sha256', $shell ) === $sent[0]['json']['shell_hash'] );
+check( 'with the site’s name and colours, and who its newsletters are from', wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) === $sent[0]['json']['brand']['site_name'] && isset( $sent[0]['json']['brand']['accent'], $sent[0]['json']['from']['name'], $sent[0]['json']['from']['email'] ) );
+check( 'and nothing about any subscriber', false === strpos( $sent[0]['body'], '@' ) || false === strpos( $sent[0]['body'], 'manage_key' ) );
+check( 'it remembers that the centre has it', hash( 'sha256', $shell ) === Mailhouse_Central_Identity::get( 'template_hash' ) && (int) Mailhouse_Central_Identity::get( 'template_published_at' ) > 0 );
+
+MHC_Centre::$verified = array();
+check( 'within the hour it is not even looked at again', 'fresh' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+
+mhc_template_due();
+check( 'looked at again and found the same, nothing is sent', 'unchanged' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+
+// The design changes: a new accent colour, saved in the settings.
+Mailhouse_Settings::set( array( 'template_accent' => '#b45309' ) );
+check( 'saving the settings marks it to be looked at', 0 === (int) Mailhouse_Central_Identity::get( 'template_checked_at' ) );
+$outcome = Mailhouse_Central_Template::work();
+$sent    = mhc_template_requests();
+check( 'and the changed shell is sent', 'published' === $outcome && 1 === count( $sent ) && '#b45309' === $sent[0]['json']['brand']['accent'] && $shell !== $sent[0]['json']['shell_html'] );
+
+// A centre from before shells.
+MHC_Centre::$template = 'old';
+Mailhouse_Settings::set( array( 'template_accent' => '#0f766e' ) );
+$outcome = Mailhouse_Central_Template::work();
+check( 'a centre that does not know about shells is not an error, and is asked again tomorrow', 'unsupported' === $outcome && '' === (string) Mailhouse_Central_Identity::get( 'template_error' ) && (int) Mailhouse_Central_Identity::get( 'template_next_at' ) > time() + DAY_IN_SECONDS - 60 );
+mhc_template_requests();
+check( 'and not before', 'waiting' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+
+// A centre that will not keep it.
+MHC_Centre::$template = 'refuse';
+mhc_template_due();
+$outcome = Mailhouse_Central_Template::work();
+check( 'a shell the centre refuses is remembered with what the centre said', 'refused' === $outcome && 'The shell has no unsubscribe link.' === Mailhouse_Central_Identity::get( 'template_error' ) );
+mhc_template_requests();
+mhc_template_due();
+check( 'and is not sent again while it is the same shell', 'unchanged' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+
+ob_start();
+wp_set_current_user( 1 );
+$screen->render();
+$html = ob_get_clean();
+check( 'the settings tab says the template was not kept, and why', false !== strpos( $html, 'not kept: The shell has no unsubscribe link.' ) );
+
+MHC_Centre::$template = 'ok';
+Mailhouse_Settings::set( array( 'template_accent' => '#7c3aed' ) );
+check( 'once it is a different shell it is sent again, and the complaint is gone', 'published' === Mailhouse_Central_Template::work() && '' === (string) Mailhouse_Central_Identity::get( 'template_error' ) );
+mhc_template_requests();
+
+// The centre cannot be reached, or fails.
+MHC_Centre::$template = '500';
+Mailhouse_Settings::set( array( 'template_accent' => '#be123c' ) );
+$before  = (string) Mailhouse_Central_Identity::get( 'template_hash' );
+$outcome = Mailhouse_Central_Template::work();
+check( 'a centre that fails is tried again in a quarter of an hour, and nothing is forgotten', 'failed' === $outcome && $before === Mailhouse_Central_Identity::get( 'template_hash' ) && abs( (int) Mailhouse_Central_Identity::get( 'template_next_at' ) - time() - 900 ) < 5 );
+MHC_Centre::$template = 'ok';
+mhc_template_requests();
+
+// The scheduled run does it, after everything else.
+mhc_template_due();
+mhc_due();
+Mailhouse_Central::tick();
+Mailhouse_Central::push();
+$paths = wp_list_pluck( MHC_Centre::$requests, 'path' );
+mhc_requests();
+check( 'the scheduled run sends it, after reporting in', in_array( '/api/v1/connector/template', $paths, true ) && array_search( '/api/v1/connector/heartbeat', $paths, true ) < array_search( '/api/v1/connector/template', $paths, true ) );
+
+// Who must say nothing.
+$mhc_home = 'https://staging.example.test';
+mhc_template_due();
+Mailhouse_Settings::set( array( 'template_accent' => '#1d4ed8' ) );
+check( 'a copy of the site at another address sends nothing', 'waiting' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+$mhc_home = 'https://shop.example.test';
+
+// The settings saved with the connection switched off is the site being
+// disconnected, whoever saves them: the settings screen writes the option
+// itself, and what this request remembers of the settings still says connected.
+Mailhouse_Central_Identity::update( array( 'template_checked_at' => time() ) );
+$mhc_off = get_option( 'mailhouse_settings' );
+$mhc_off[ Mailhouse_Central_Identity::FLAG_SETTING ] = false;
+$mhc_on = get_option( 'mailhouse_settings' );
+update_option( 'mailhouse_settings', $mhc_off );
+check( 'a save that switches the connection off writes nothing to the connection', (int) Mailhouse_Central_Identity::get( 'template_checked_at' ) > 0 );
+update_option( 'mailhouse_settings', $mhc_on );
+Mailhouse_Settings::flush();
+
+mhc_forget();
+check( 'a site that is not connected has no shell to send, and nothing to remember', 'waiting' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() && false === get_option( 'mailhouse_central', false ) );
+Mailhouse_Settings::set( array( 'template_accent' => '#111111' ) );
+check( 'and saving its settings does not make it start remembering', false === get_option( 'mailhouse_central', false ) );
+$mhc_name = get_option( 'blogname' );
+update_option( 'blogname', $mhc_name . ' renamed' );
+check( 'nor does renaming the site', false === get_option( 'mailhouse_central', false ) );
+update_option( 'blogname', $mhc_name );
+
+update_option( 'mailhouse_settings', $mhc_template_settings );
 
 mailhouse_test_results();
