@@ -937,6 +937,54 @@ Mailhouse_Settings::set( array( 'template_accent' => '#7c3aed' ) );
 check( 'once it is a different shell it is sent again, and the complaint is gone', 'published' === Mailhouse_Central_Template::work() && '' === (string) Mailhouse_Central_Identity::get( 'template_error' ) );
 mhc_template_requests();
 
+// Who the newsletters are from is what a reader would see, as the mailer
+// would have it, and not always what is written in the newsletter's box.
+$sender_before = array(
+	'from_email'          => mailhouse_option( 'from_email' ),
+	'from_name'           => mailhouse_option( 'from_name' ),
+	'campaign_from_email' => mailhouse_option( 'campaign_from_email' ),
+	'campaign_from_name'  => mailhouse_option( 'campaign_from_name' ),
+	'force_from_email'    => mailhouse_option( 'force_from_email' ),
+	'force_from_name'     => mailhouse_option( 'force_from_name' ),
+);
+Mailhouse_Settings::set(
+	array(
+		'from_email'          => 'office@example.org',
+		'from_name'           => 'The Office',
+		'campaign_from_email' => 'news@example.org',
+		'campaign_from_name'  => 'The News',
+		'force_from_email'    => false,
+		'force_from_name'     => false,
+	)
+);
+$outcome = Mailhouse_Central_Template::work();
+$sent    = mhc_template_requests();
+check( 'a change of sender alone is sent to the centre, though the shell is the same', 'published' === $outcome && 1 === count( $sent ) && hash( 'sha256', $sent[0]['json']['shell_html'] ) === Mailhouse_Central_Identity::get( 'template_hash' ) );
+check( 'and it is the newsletters’ own sender where there is one', 'news@example.org' === $sent[0]['json']['from']['email'] && 'The News' === $sent[0]['json']['from']['name'] );
+mhc_template_due();
+check( 'said once, it is not said again', 'unchanged' === Mailhouse_Central_Template::work() && array() === mhc_template_requests() );
+
+// Written in the box, and not an address: the mailer does not use it.
+Mailhouse_Settings::set( array( 'campaign_from_email' => 'newsletter@localhost' ) );
+Mailhouse_Central_Template::work();
+$sent = mhc_template_requests();
+check( 'a sender that is not an address is not what the centre is told: the site’s own is', 1 === count( $sent ) && 'office@example.org' === $sent[0]['json']['from']['email'] );
+
+// A site told to send everything as one address, under one name.
+Mailhouse_Settings::set(
+	array(
+		'campaign_from_email' => 'news@example.org',
+		'force_from_email'    => true,
+		'force_from_name'     => true,
+	)
+);
+Mailhouse_Central_Template::work();
+$sent = mhc_template_requests();
+check( 'a site that sends everything as one address says that one', 1 === count( $sent ) && 'office@example.org' === $sent[0]['json']['from']['email'] && 'The Office' === $sent[0]['json']['from']['name'] );
+Mailhouse_Settings::set( $sender_before );
+Mailhouse_Central_Template::work();
+mhc_template_requests();
+
 // The centre cannot be reached, or fails.
 MHC_Centre::$template = '500';
 Mailhouse_Settings::set( array( 'template_accent' => '#be123c' ) );

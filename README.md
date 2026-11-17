@@ -181,6 +181,13 @@ are each subscriber's own. Nothing about any subscriber is in it.
 - It is sent after connecting, and again when the design changes: the
   plugin's settings, the site's name or its theme. Otherwise the site looks
   once an hour whether what it would send is still what the centre has.
+- With it go the site's name and colours, and who its newsletters are
+  from: the address and name a reader would see, as the mailer would have
+  them. That is the newsletters' own sender where one is set and is an
+  address; the site's own where it is not, or where the site is set to
+  send everything as one address. A change of sender is sent to the centre
+  like a change of design. The centre goes by it when it warns that a
+  central route would send a website's mail as somebody else.
 - The centre keeps it only as something to look at: anything that could
   run is taken out there, and a template with no place for a body or no
   unsubscribe link is refused. **Settings → Central** says when the

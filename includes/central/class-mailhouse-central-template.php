@@ -157,13 +157,31 @@ class Mailhouse_Central_Template {
 	 * @return array<string,string|null>
 	 */
 	protected static function from() {
-		$name  = (string) mailhouse_option( 'campaign_from_name' );
-		$email = (string) mailhouse_option( 'campaign_from_email' );
 		$reply = (string) mailhouse_option( 'campaign_reply_to' );
 
+		// Who a newsletter really leaves as, which is not always what is
+		// written in the newsletter's own box. One that is not an address is
+		// never used: the mailer falls back to the site's own. And a site
+		// told to send everything as one address, or under one name, does.
+		// The centre is told what a reader would see, as Mailhouse_Mailer
+		// would have it.
+		$own_email = mailhouse_clean_email( mailhouse_option( 'from_email' ) );
+		$email     = mailhouse_clean_email( mailhouse_option( 'campaign_from_email' ) );
+
+		if ( '' === $email || ( '' !== $own_email && mailhouse_option( 'force_from_email' ) ) ) {
+			$email = $own_email;
+		}
+
+		$own_name = (string) mailhouse_option( 'from_name' );
+		$name     = (string) mailhouse_option( 'campaign_from_name' );
+
+		if ( '' === $name || ( '' !== $own_name && mailhouse_option( 'force_from_name' ) ) ) {
+			$name = $own_name;
+		}
+
 		return array(
-			'name'     => substr( '' !== $name ? $name : (string) mailhouse_option( 'from_name' ), 0, 200 ),
-			'email'    => substr( '' !== $email ? $email : (string) mailhouse_option( 'from_email' ), 0, 254 ),
+			'name'     => substr( $name, 0, 200 ),
+			'email'    => substr( $email, 0, 254 ),
 			'reply_to' => '' !== $reply ? substr( $reply, 0, 254 ) : ( '' !== (string) mailhouse_option( 'reply_to' ) ? substr( (string) mailhouse_option( 'reply_to' ), 0, 254 ) : null ),
 		);
 	}
@@ -195,8 +213,16 @@ class Mailhouse_Central_Template {
 
 		$shell = self::shell();
 		$hash  = hash( 'sha256', $shell );
+		$brand = self::brand();
+		$from  = self::from();
 
-		if ( $hash === (string) $state['template_hash'] || $hash === (string) $state['template_refused'] ) {
+		// What goes beside the shell: the site's name and colours, and who
+		// its newsletters are from. The centre is told again when any of it
+		// changes, though the shell is the same. It is what the centre goes
+		// by when it says a route would send as somebody else.
+		$beside = hash( 'sha256', (string) wp_json_encode( array( $brand, $from ) ) );
+
+		if ( $hash === (string) $state['template_refused'] || ( $hash === (string) $state['template_hash'] && $beside === (string) $state['template_beside'] ) ) {
 			// The one the centre has, or the one it would not take. Either
 			// way there is nothing new to say.
 			Mailhouse_Central_Identity::update( array( 'template_checked_at' => $now ) );
@@ -209,8 +235,8 @@ class Mailhouse_Central_Template {
 			array(
 				'shell_html' => $shell,
 				'shell_hash' => $hash,
-				'brand'      => self::brand(),
-				'from'       => self::from(),
+				'brand'      => $brand,
+				'from'       => $from,
 			),
 			$timeout
 		);
@@ -227,6 +253,7 @@ class Mailhouse_Central_Template {
 				Mailhouse_Central_Identity::update(
 					array(
 						'template_hash'         => $hash,
+						'template_beside'       => $beside,
 						'template_refused'      => '',
 						'template_published_at' => $now,
 						'template_checked_at'   => $now,
