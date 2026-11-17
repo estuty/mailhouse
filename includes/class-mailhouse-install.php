@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.5.0';
+	const DB_VERSION = '1.6.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -177,6 +177,7 @@ class Mailhouse_Install {
 				remote_job_id char(36) DEFAULT NULL,
 				reported tinyint(3) unsigned NOT NULL DEFAULT 0,
 				attempt_started_at datetime DEFAULT NULL,
+				error_class varchar(10) DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY campaign_subscriber (campaign_id,subscriber_id),
 				UNIQUE KEY remote_job (remote_job_id),
@@ -283,6 +284,8 @@ class Mailhouse_Install {
 				reported_at int(10) unsigned NOT NULL DEFAULT 0,
 				next_at int(10) unsigned NOT NULL DEFAULT 0,
 				started_at datetime DEFAULT NULL,
+				hold varchar(10) NOT NULL DEFAULT '',
+				unknown_reported tinyint(1) NOT NULL DEFAULT 0,
 				created_at datetime NOT NULL,
 				updated_at datetime NOT NULL,
 				PRIMARY KEY  (id),

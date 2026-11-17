@@ -90,6 +90,11 @@ class Mailhouse_Central_Commands {
 		'tag.delete',
 		'site.reconcile',
 		'campaign.prepare',
+		'campaign.pause',
+		'campaign.resume',
+		'campaign.cancel',
+		'campaign.resolve',
+		'campaign.test',
 	);
 
 	/**
@@ -375,7 +380,9 @@ class Mailhouse_Central_Commands {
 	 * @return bool
 	 */
 	protected static function changes( $type ) {
-		return ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile', 'campaign.prepare' ), true );
+		// Nothing about a campaign changes a subscriber: what becomes of
+		// one is reported in its own way, not as news of the list.
+		return 0 !== strpos( $type, 'campaign.' ) && ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile' ), true );
 	}
 
 	/**
@@ -430,6 +437,16 @@ class Mailhouse_Central_Commands {
 				return self::reconcile();
 			case 'campaign.prepare':
 				return Mailhouse_Central_Campaigns::prepare( $payload );
+			case 'campaign.pause':
+				return Mailhouse_Central_Campaigns::control( 'pause', $payload );
+			case 'campaign.resume':
+				return Mailhouse_Central_Campaigns::control( 'resume', $payload );
+			case 'campaign.cancel':
+				return Mailhouse_Central_Campaigns::control( 'cancel', $payload );
+			case 'campaign.resolve':
+				return Mailhouse_Central_Campaigns::resolve( $payload );
+			case 'campaign.test':
+				return Mailhouse_Central_Campaigns::test( $payload );
 		}
 
 		return self::refuse( 'unsupported' );

@@ -24,8 +24,17 @@
  *    sent. A site that was away for a week does not come back and send
  *    last week's newsletter.
  *
+ * 6. What became of each message is told to the centre as it happens: the
+ *    transport took it, refused it, or did not say; it was not sent. So is
+ *    a first open and a first click, where this site records them.
+ *
  * Taking the same request in twice makes one campaign: the execution's id
  * is unique here, and a repeat carries on where the first stopped.
+ *
+ * Either end can hold a campaign and either can call it off. Whoever holds
+ * it lets it go: the centre cannot lift a hold this site's administrator
+ * put on, nor the other way about. This site keeps the last word on what
+ * it sends, and that word can only ever be "less".
  *
  * @package Mailhouse
  */
@@ -87,6 +96,42 @@ class Mailhouse_Central_Campaigns {
 	 * Rows read at a time when the recipients are hashed.
 	 */
 	const HASH_PAGE = 5000;
+
+	/**
+	 * Outcomes told to the centre in one request.
+	 */
+	const REPORT_PAGE = 1000;
+
+	/**
+	 * A queue row's `reported`: nothing is owed to the centre.
+	 */
+	const REPORTED_NONE = 0;
+
+	/**
+	 * What became of the message is owed.
+	 */
+	const REPORTED_OWED = 1;
+
+	/**
+	 * The centre has been told.
+	 */
+	const REPORTED_DONE = 2;
+
+	/**
+	 * The centre has been told what became of it, and is owed a first open
+	 * or click that happened since.
+	 */
+	const REPORTED_ENGAGED = 3;
+
+	/**
+	 * The centre no longer knows the campaign: there is nobody to tell.
+	 */
+	const REPORTED_NOBODY = 9;
+
+	/**
+	 * The most addresses a test goes to.
+	 */
+	const TEST_ADDRESSES = 5;
 
 	/**
 	 * The states in which there is still something to do.
@@ -465,6 +510,10 @@ class Mailhouse_Central_Campaigns {
 			return self::style_properties();
 		};
 
+		// What a script or a style sheet says is not text. Taking the tags
+		// off would leave it standing in the message as if it were.
+		$html = (string) preg_replace( '@<(script|style)\b[^>]*>.*?</\1\s*>@is', '', (string) $html );
+
 		add_filter( 'safe_style_css', $styles, 99 );
 		$clean = wp_kses( (string) $html, $allowed, $protocols );
 		remove_filter( 'safe_style_css', $styles, 99 );
@@ -536,7 +585,8 @@ class Mailhouse_Central_Campaigns {
 				continue;
 			}
 
-			if ( 'ready' === $row->state && strtotime( $row->start_at . ' UTC' ) <= $now ) {
+			// Held: its time may come and go. It starts when it is let go.
+			if ( 'ready' === $row->state && '' === (string) $row->hold && strtotime( $row->start_at . ' UTC' ) <= $now ) {
 				self::start( $row );
 				continue;
 			}
@@ -606,9 +656,27 @@ class Mailhouse_Central_Campaigns {
 		$deadline = is_int( $deadline ) ? $deadline : time() + self::TIME_BOX;
 		$table    = self::table();
 
-		// Those with something to fetch, or something the centre has not heard.
+		// Those with recipients still to fetch.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		$rows = (array) $wpdb->get_results( "SELECT * FROM {$table} WHERE state = 'preparing' OR state <> reported_state OR state = 'sending' ORDER BY id ASC LIMIT 20" );
+		$rows = (array) $wpdb->get_results( "SELECT * FROM {$table} WHERE state = 'preparing' ORDER BY id ASC LIMIT 20" );
+
+		foreach ( $rows as $row ) {
+			if ( time() >= $deadline ) {
+				return;
+			}
+
+			if ( (int) $row->next_at <= time() ) {
+				self::fetch( $row, $deadline );
+			}
+		}
+
+		// What became of each message since the centre was last told. Each
+		// such report says how far its campaign has got as well.
+		self::outcomes( $deadline );
+
+		// Those the centre has not heard the latest of, and those under way.
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$rows = (array) $wpdb->get_results( "SELECT * FROM {$table} WHERE state <> reported_state OR state = 'sending' ORDER BY id ASC LIMIT 20" );
 
 		foreach ( $rows as $row ) {
 			if ( time() >= $deadline ) {
@@ -617,14 +685,6 @@ class Mailhouse_Central_Campaigns {
 
 			if ( (int) $row->next_at > time() ) {
 				continue;
-			}
-
-			if ( 'preparing' === $row->state ) {
-				$row = self::fetch( $row, $deadline );
-
-				if ( null === $row ) {
-					continue;
-				}
 			}
 
 			if ( $row->state !== $row->reported_state || ( 'sending' === $row->state && time() - (int) $row->reported_at >= self::REPORT_EVERY ) ) {
@@ -919,6 +979,7 @@ class Mailhouse_Central_Campaigns {
 		self::set(
 			(int) $row->id,
 			array(
+				'hold'  => '',
 				'state' => 'sending' === $row->state ? 'completed' : 'cancelled',
 				'error' => $left ? sprintf( /* translators: %d: a number of messages. */ __( 'The deadline passed with %d messages not sent. They were not sent.', 'mailhouse' ), $left ) : (string) $row->error,
 			)
@@ -985,14 +1046,760 @@ class Mailhouse_Central_Campaigns {
 			return;
 		}
 
-		self::call_off( (int) $post_id, __( 'Called off by an administrator of this site.', 'mailhouse' ) );
+		self::cancel( $row, __( 'Called off by an administrator of this site.', 'mailhouse' ) );
+	}
+
+	/**
+	 * Call a campaign off, whoever asked: what has not been attempted is
+	 * not sent, and is kept. What has gone has gone.
+	 *
+	 * @param object $row    The campaign.
+	 * @param string $reason Why, in words.
+	 * @return int How many messages were called off, or -1 if it was already over.
+	 */
+	protected static function cancel( $row, $reason ) {
+		if ( ! in_array( $row->state, self::ACTIVE, true ) ) {
+			return -1;
+		}
+
+		$left = self::call_off( (int) $row->post_id, $reason );
+
 		self::set(
 			(int) $row->id,
 			array(
 				'state' => 'cancelled',
-				'error' => __( 'Called off by an administrator of this site.', 'mailhouse' ),
+				'hold'  => '',
+				'error' => $reason,
 			)
 		);
+
+		$stats = Mailhouse_Queue::campaign_stats( (int) $row->post_id );
+
+		update_post_meta( (int) $row->post_id, '_mailhouse_status', $stats['sent'] ? 'sent' : '' );
+
+		return $left;
+	}
+
+	// ---- holding, and letting go ------------------------------------------------------
+
+	/**
+	 * Who is holding a campaign.
+	 *
+	 * @param object $row The campaign.
+	 * @return string[] Any of `site` and `centre`.
+	 */
+	protected static function holders( $row ) {
+		switch ( (string) $row->hold ) {
+			case 'both':
+				return array( 'site', 'centre' );
+			case 'site':
+			case 'centre':
+				return array( (string) $row->hold );
+		}
+
+		return array();
+	}
+
+	/**
+	 * Hold a campaign: nothing more of it is attempted until everybody who
+	 * holds it has let it go. One that has not begun does not begin.
+	 *
+	 * @param object $row The campaign.
+	 * @param string $by  `site` or `centre`.
+	 * @return bool Whether it is one that can be held.
+	 */
+	protected static function hold( $row, $by ) {
+		global $wpdb;
+
+		if ( ! in_array( $row->state, self::ACTIVE, true ) ) {
+			return false;
+		}
+
+		$holders = array_unique( array_merge( self::holders( $row ), array( $by ) ) );
+
+		if ( 'sending' === $row->state ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->update(
+				Mailhouse_Queue::table(),
+				array( 'status' => 'paused' ),
+				array(
+					'campaign_id' => (int) $row->post_id,
+					'status'      => 'pending',
+				)
+			);
+			update_post_meta( (int) $row->post_id, '_mailhouse_status', 'paused' );
+		}
+
+		self::set(
+			(int) $row->id,
+			array(
+				'hold'           => count( $holders ) > 1 ? 'both' : $by,
+				// The centre is told at the next opportunity.
+				'reported_state' => '',
+			)
+		);
+
+		return true;
+	}
+
+	/**
+	 * Let a campaign go, for one of those who hold it.
+	 *
+	 * @param object $row The campaign.
+	 * @param string $by  `site` or `centre`.
+	 * @return bool Whether nobody holds it now.
+	 */
+	protected static function release( $row, $by ) {
+		global $wpdb;
+
+		$before  = self::holders( $row );
+		$holders = array_values( array_diff( $before, array( $by ) ) );
+
+		if ( count( $before ) === count( $holders ) ) {
+			return ! $holders;
+		}
+
+		if ( ! $holders && 'sending' === $row->state ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->update(
+				Mailhouse_Queue::table(),
+				array(
+					'status'       => 'pending',
+					'scheduled_at' => mailhouse_now(),
+				),
+				array(
+					'campaign_id' => (int) $row->post_id,
+					'status'      => 'paused',
+				)
+			);
+			update_post_meta( (int) $row->post_id, '_mailhouse_status', 'sending' );
+		}
+
+		self::set(
+			(int) $row->id,
+			array(
+				'hold'           => $holders ? $holders[0] : '',
+				'reported_state' => '',
+			)
+		);
+
+		return ! $holders;
+	}
+
+	/**
+	 * Whether a campaign is held, for the queue to ask before each message.
+	 *
+	 * @param int $post_id The campaign's post.
+	 * @return bool
+	 */
+	public static function held( $post_id ) {
+		$row = self::for_post( $post_id );
+
+		return $row && '' !== (string) $row->hold;
+	}
+
+	/**
+	 * An administrator of this site holds a campaign.
+	 *
+	 * @param int $post_id The campaign's post.
+	 * @return void
+	 */
+	public static function hold_locally( $post_id ) {
+		$row = self::for_post( $post_id );
+
+		if ( $row ) {
+			self::hold( $row, 'site' );
+		}
+	}
+
+	/**
+	 * An administrator of this site lets a campaign go. A hold the centre
+	 * put on is the centre's to lift.
+	 *
+	 * @param int $post_id The campaign's post.
+	 * @return bool Whether nobody holds it now.
+	 */
+	public static function release_locally( $post_id ) {
+		$row = self::for_post( $post_id );
+
+		return $row ? self::release( $row, 'site' ) : false;
+	}
+
+	// ---- what the centre asks about a campaign this site holds -------------------------
+
+	/**
+	 * The campaign an execution id names.
+	 *
+	 * @param array $payload Decoded payload.
+	 * @return object|null
+	 */
+	protected static function named( array $payload ) {
+		global $wpdb;
+
+		$execution = isset( $payload['execution_id'] ) && is_string( $payload['execution_id'] ) ? strtolower( $payload['execution_id'] ) : '';
+
+		if ( ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $execution ) ) {
+			return null;
+		}
+
+		$table = self::table();
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE execution_id = %s", $execution ) );
+	}
+
+	/**
+	 * Carry out `campaign.pause`, `campaign.resume` or `campaign.cancel`.
+	 *
+	 * Asked twice, each does nothing the second time. Asked of a campaign
+	 * that is over, each does nothing and says so.
+	 *
+	 * @param string $verb    `pause`, `resume` or `cancel`.
+	 * @param array  $payload Decoded payload.
+	 * @return array array( status, result ).
+	 */
+	public static function control( $verb, array $payload ) {
+		$row = self::named( $payload );
+
+		if ( ! $row ) {
+			return array( 'rejected', array( 'reason' => 'not_found' ) );
+		}
+
+		if ( ! in_array( $row->state, self::ACTIVE, true ) ) {
+			return array(
+				'applied',
+				array(
+					'noop'  => true,
+					'state' => (string) $row->state,
+				)
+			);
+		}
+
+		switch ( $verb ) {
+			case 'pause':
+				$already = in_array( 'centre', self::holders( $row ), true );
+
+				self::hold( $row, 'centre' );
+
+				return array( 'applied', $already ? array( 'noop' => true ) : array( 'held' => true ) );
+
+			case 'resume':
+				if ( ! in_array( 'centre', self::holders( $row ), true ) ) {
+					// Not held by the centre. If this site's administrator
+					// holds it, that stands, and the centre is told so.
+					return array(
+						'applied',
+						array(
+							'noop'    => true,
+							'held_by' => (string) $row->hold,
+						)
+					);
+				}
+
+				$free = self::release( $row, 'centre' );
+
+				if ( $free ) {
+					Mailhouse_Queue::kick();
+				}
+
+				return array( 'applied', array( 'held_by' => $free ? '' : 'site' ) );
+
+			case 'cancel':
+				$left  = self::cancel( $row, __( 'Called off at the centre.', 'mailhouse' ) );
+				$stats = Mailhouse_Queue::campaign_stats( (int) $row->post_id );
+
+				return array(
+					'applied',
+					array(
+						// How many had gone before this arrived: they cannot be recalled.
+						'sent'      => (int) $stats['sent'],
+						'cancelled' => max( 0, $left ),
+					)
+				);
+		}
+
+		return array( 'rejected', array( 'reason' => 'unsupported' ) );
+	}
+
+	/**
+	 * Carry out `campaign.resolve`: what an operator at the centre decided
+	 * about messages that may or may not have gone.
+	 *
+	 * `resend` is the only way such a message is ever tried again, and only
+	 * while the campaign may still be sent here. The other two send
+	 * nothing: they bring this site's record into line with the centre's.
+	 *
+	 * @param array $payload Decoded payload.
+	 * @return array array( status, result ).
+	 */
+	public static function resolve( array $payload ) {
+		global $wpdb;
+
+		$row        = self::named( $payload );
+		$resolution = isset( $payload['resolution'] ) && is_string( $payload['resolution'] ) ? $payload['resolution'] : '';
+		$jobs       = array();
+
+		foreach ( isset( $payload['job_ids'] ) && is_array( $payload['job_ids'] ) ? $payload['job_ids'] : array() as $job ) {
+			if ( is_string( $job ) && preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', strtolower( $job ) ) ) {
+				$jobs[] = strtolower( $job );
+			}
+		}
+
+		if ( ! $jobs || count( $jobs ) > 200 || ! in_array( $resolution, array( 'resend', 'mark_sent', 'abandon' ), true ) ) {
+			return array( 'rejected', array( 'reason' => 'malformed' ) );
+		}
+
+		if ( ! $row ) {
+			return array( 'rejected', array( 'reason' => 'not_found' ) );
+		}
+
+		$queue = Mailhouse_Queue::table();
+		$post  = (int) $row->post_id;
+		$in    = implode( ',', array_fill( 0, count( $jobs ), '%s' ) );
+
+		if ( 'resend' === $resolution ) {
+			// Nothing of a campaign is sent once it is called off, or after
+			// its deadline: not even on the centre's word.
+			if ( in_array( $row->state, array( 'cancelled', 'failed' ), true ) || strtotime( $row->deadline_at . ' UTC' ) <= self::now() ) {
+				return array( 'rejected', array( 'reason' => 'too_late' ) );
+			}
+
+			// Whatever the centre thinks is unclear and this site holds as
+			// settled is told to the centre again, as it is.
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+			$wpdb->query(
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+					"UPDATE {$queue} SET reported = 1 WHERE campaign_id = %d AND status IN ('sent', 'failed', 'skipped', 'cancelled') AND remote_job_id IN ({$in})",
+					array_merge( array( $post ), $jobs )
+				)
+			);
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+			$changed = (int) $wpdb->query(
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+					"UPDATE {$queue} SET status = %s, scheduled_at = %s, error = '', error_class = NULL, reported = 0, claim_token = NULL, claimed_at = NULL, attempt_started_at = NULL WHERE campaign_id = %d AND status = 'uncertain' AND remote_job_id IN ({$in})",
+					array_merge( array( '' !== (string) $row->hold ? 'paused' : 'pending', mailhouse_now(), $post ), $jobs )
+				)
+			);
+
+			if ( $changed && 'completed' === $row->state ) {
+				// It has something to send again.
+				self::set( (int) $row->id, array( 'state' => 'sending' ) );
+				update_post_meta( $post, '_mailhouse_status', '' !== (string) $row->hold ? 'paused' : 'sending' );
+			}
+
+			if ( $changed ) {
+				Mailhouse_Queue::kick();
+			}
+
+			return array( 'applied', $changed ? array( 'changed' => $changed ) : array( 'noop' => true ) );
+		}
+
+		$sent = 'mark_sent' === $resolution;
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery
+		$changed = (int) $wpdb->query(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+				"UPDATE {$queue} SET status = %s, sent_at = IF(%d = 1, COALESCE(sent_at, %s), sent_at), error = %s, reported = 2 WHERE campaign_id = %d AND status = 'uncertain' AND remote_job_id IN ({$in})",
+				array_merge(
+					array(
+						$sent ? 'sent' : 'failed',
+						$sent ? 1 : 0,
+						mailhouse_now(),
+						$sent ? __( 'Counted as sent at the centre, on an operator’s judgement.', 'mailhouse' ) : __( 'Given up at the centre.', 'mailhouse' ),
+						$post,
+					),
+					$jobs
+				)
+			)
+		);
+
+		return array( 'applied', $changed ? array( 'changed' => $changed ) : array( 'noop' => true ) );
+	}
+
+	/**
+	 * Carry out `campaign.test`: send a draft, now, to a few addresses an
+	 * operator named, in this site's template and through its transport.
+	 *
+	 * Nothing is created: no campaign, no record, no row in the queue, and
+	 * nobody's statistics change. It is addressed to no subscriber, so a
+	 * merge tag is filled in with nobody's details and the footer carries
+	 * no unsubscribe link of anybody's.
+	 *
+	 * @param array $payload Decoded payload.
+	 * @return array array( status, result ).
+	 */
+	public static function test( array $payload ) {
+		$text = static function ( $key ) use ( $payload ) {
+			return isset( $payload[ $key ] ) && is_string( $payload[ $key ] ) ? $payload[ $key ] : null;
+		};
+
+		$subject   = $text( 'subject' );
+		$preheader = $text( 'preheader' );
+		$html      = $text( 'body_html' );
+		$to        = array();
+
+		foreach ( isset( $payload['to'] ) && is_array( $payload['to'] ) ? $payload['to'] : array() as $address ) {
+			$address = is_string( $address ) ? mailhouse_clean_email( $address ) : '';
+
+			if ( '' === $address ) {
+				return array( 'rejected', array( 'reason' => 'malformed' ) );
+			}
+
+			$to[ $address ] = true;
+		}
+
+		if (
+			null === $subject || '' === trim( $subject ) || null === $preheader || null === $html || '' === $html
+			|| ! $to || count( $to ) > self::TEST_ADDRESSES
+			|| preg_match( '/[\x00-\x1f\x7f]/', $subject ) || preg_match( '/[\x00-\x1f\x7f]/', $preheader )
+		) {
+			return array( 'rejected', array( 'reason' => 'malformed' ) );
+		}
+
+		// Cleaned here, as the real thing is.
+		$body = self::sanitise( $html );
+
+		if ( '' === trim( wp_strip_all_tags( $body ) ) && false === stripos( $body, '<img' ) ) {
+			return array( 'rejected', array( 'reason' => 'unusable' ) );
+		}
+
+		$fields = array();
+
+		foreach ( isset( $payload['fields'] ) && is_array( $payload['fields'] ) ? $payload['fields'] : array() as $name ) {
+			if ( is_string( $name ) && preg_match( '/^[a-z0-9_]{1,60}$/', strtolower( $name ) ) ) {
+				$fields[] = strtolower( $name );
+			}
+		}
+
+		$context = array(
+			'subscriber' => null,
+			'campaign'   => null,
+			'fields'     => $fields,
+		);
+
+		// Never run as blocks or shortcodes, exactly as the real thing is not.
+		$line    = Mailhouse_Merge_Tags::render( $subject, $context );
+		$content = Mailhouse_Merge_Tags::render( $body, $context, 'html' );
+		$wrapped = Mailhouse_Template::wrap(
+			$content,
+			array(
+				'subject'         => $line,
+				'preview'         => Mailhouse_Merge_Tags::render( $preheader, $context ),
+				'subscriber'      => null,
+				'unsubscribe_url' => '',
+				'preferences_url' => '',
+			)
+		);
+		/* translators: %s: the subject of a newsletter. */
+		$line = sprintf( __( '[Test] %s', 'mailhouse' ), wp_specialchars_decode( $line, ENT_QUOTES ) );
+		$sent = 0;
+
+		foreach ( array_keys( $to ) as $address ) {
+			$took = Mailhouse_Mailer::send(
+				$address,
+				$line,
+				$wrapped,
+				array(
+					'text'        => mailhouse_html_to_text( $wrapped ),
+					'headers'     => array( 'X-MH-Test: 1' ),
+					// By the route a campaign would take, or not at all.
+					'no_fallback' => true,
+					'from'        => mailhouse_clean_email( mailhouse_option( 'campaign_from_email' ) ),
+					'from_name'   => (string) mailhouse_option( 'campaign_from_name' ),
+					'reply_to'    => mailhouse_clean_email( mailhouse_option( 'campaign_reply_to' ) ),
+				)
+			);
+
+			$sent += $took ? 1 : 0;
+		}
+
+		if ( ! $sent ) {
+			return array( 'failed', array( 'reason' => 'transport' ) );
+		}
+
+		return array(
+			'applied',
+			array(
+				'sent' => $sent,
+				'of'   => count( $to ),
+			)
+		);
+	}
+
+	// ---- telling the centre what became of each message --------------------------------
+
+	/**
+	 * Tell the centre what became of each message since it was last told,
+	 * a thousand at a time, for as long as the time allows.
+	 *
+	 * @param int $deadline When to stop, as a Unix time.
+	 * @return void
+	 */
+	protected static function outcomes( $deadline ) {
+		$tried = array();
+
+		for ( $round = 0; $round < 50 && time() < $deadline; $round++ ) {
+			$owed = self::owed( $tried );
+
+			if ( ! $owed ) {
+				return;
+			}
+
+			$by_campaign = array();
+
+			foreach ( $owed as $item ) {
+				$by_campaign[ (int) $item->campaign_id ][] = $item;
+			}
+
+			foreach ( $by_campaign as $post_id => $items ) {
+				if ( time() >= $deadline ) {
+					return;
+				}
+
+				$row = self::for_post( $post_id );
+
+				if ( ! $row ) {
+					// A message with no campaign: there is nobody to tell.
+					self::mark( $items, self::REPORTED_NOBODY );
+					continue;
+				}
+
+				if ( (int) $row->next_at > time() || ! self::report( $row, max( 1, min( Mailhouse_Central::TICK_TIMEOUT, $deadline - time() ) ), $items ) ) {
+					// The centre could not be told. Not again in this run.
+					$tried[] = (int) $post_id;
+				}
+			}
+
+			if ( count( $owed ) < self::REPORT_PAGE ) {
+				return;
+			}
+		}
+	}
+
+	/**
+	 * The messages whose outcome, or whose first open or click, the centre
+	 * has not been told: the oldest first, at most a page.
+	 *
+	 * @param int[] $except Campaigns to leave out.
+	 * @return object[]
+	 */
+	protected static function owed( array $except = array() ) {
+		global $wpdb;
+
+		$queue = Mailhouse_Queue::table();
+		$not   = $except ? ' AND campaign_id NOT IN (' . implode( ',', array_map( 'intval', $except ) ) . ')' : '';
+		$found = array();
+
+		foreach ( array( self::REPORTED_OWED, self::REPORTED_ENGAGED ) as $kind ) {
+			$room = self::REPORT_PAGE - count( $found );
+
+			if ( $room <= 0 ) {
+				break;
+			}
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+			$page = (array) $wpdb->get_results( $wpdb->prepare( "SELECT id, campaign_id, remote_job_id, status, attempts, error, error_class, sent_at, opened_at, clicked_at, provider_message_id, reported FROM {$queue} WHERE reported = %d AND remote_job_id IS NOT NULL{$not} ORDER BY id ASC LIMIT %d", $kind, $room ) );
+
+			$found = array_merge( $found, $page );
+		}
+
+		return $found;
+	}
+
+	/**
+	 * A moment of this site's, as the centre reads one.
+	 *
+	 * @param string|null $datetime A `Y-m-d H:i:s` in UTC, or nothing for now.
+	 * @return string
+	 */
+	protected static function at( $datetime = null ) {
+		$time = $datetime ? strtotime( $datetime . ' UTC' ) : false;
+
+		return gmdate( 'Y-m-d\TH:i:s\Z', false === $time ? time() : $time );
+	}
+
+	/**
+	 * What a transport said, for the centre: cut to length, and with any
+	 * address taken out. A refusal often quotes the address it refused, and
+	 * the centre is not sent addresses.
+	 *
+	 * @param string $error What it said.
+	 * @return string
+	 */
+	public static function said( $error ) {
+		$error = preg_replace( '/[^\s<>()\[\],;:"\']+@[^\s<>()\[\],;:"\']+/', '[address]', (string) $error );
+
+		return Mailhouse_Central_Protocol::text( (string) $error, 300 );
+	}
+
+	/**
+	 * What to tell the centre about one message.
+	 *
+	 * @param object $item A row of the queue.
+	 * @return array[] Events.
+	 */
+	protected static function events_of( $item ) {
+		$events = array();
+		$job    = (string) $item->remote_job_id;
+		$tries  = max( 1, (int) $item->attempts );
+		$error  = '' !== (string) $item->error ? self::said( (string) $item->error ) : '';
+
+		if ( self::REPORTED_OWED === (int) $item->reported ) {
+			switch ( (string) $item->status ) {
+				case 'sent':
+					$event = array(
+						'job_id'  => $job,
+						'type'    => 'accepted',
+						'at'      => self::at( $item->sent_at ),
+						'attempt' => $tries,
+					);
+
+					if ( '' !== (string) $item->provider_message_id ) {
+						$event['provider_message_id'] = substr( (string) $item->provider_message_id, 0, 191 );
+					}
+
+					$events[] = $event;
+					break;
+
+				case 'failed':
+					$event = array(
+						'job_id'  => $job,
+						'type'    => 'failed',
+						'at'      => self::at(),
+						'attempt' => $tries,
+						'class'   => 'transient' === (string) $item->error_class ? 'transient' : 'permanent',
+					);
+
+					if ( '' !== $error ) {
+						$event['error'] = $error;
+					}
+
+					$events[] = $event;
+					break;
+
+				case 'uncertain':
+					$event = array(
+						'job_id'  => $job,
+						'type'    => 'uncertain',
+						'at'      => self::at(),
+						'attempt' => $tries,
+					);
+
+					if ( '' !== $error ) {
+						$event['error'] = $error;
+					}
+
+					$events[] = $event;
+					break;
+
+				case 'skipped':
+					$events[] = array(
+						'job_id' => $job,
+						'type'   => 'skipped',
+						'at'     => self::at(),
+						'reason' => 'not_subscribed',
+					);
+					break;
+
+				case 'cancelled':
+					$event = array(
+						'job_id' => $job,
+						'type'   => 'cancelled',
+						'at'     => self::at(),
+					);
+
+					if ( '' !== $error ) {
+						$event['error'] = $error;
+					}
+
+					$events[] = $event;
+					break;
+			}
+		}
+
+		if ( $item->opened_at ) {
+			$events[] = array(
+				'job_id' => $job,
+				'type'   => 'opened',
+				'at'     => self::at( $item->opened_at ),
+			);
+		}
+
+		if ( $item->clicked_at ) {
+			$events[] = array(
+				'job_id' => $job,
+				'type'   => 'clicked',
+				'at'     => self::at( $item->clicked_at ),
+			);
+		}
+
+		return $events;
+	}
+
+	/**
+	 * Mark messages as told to the centre: each only if it is still as it
+	 * was when it was read. One that has been opened in the meantime stays
+	 * owed, and is told again with the open.
+	 *
+	 * @param object[] $items Rows of the queue, as they were read.
+	 * @param int      $as    What to mark them.
+	 * @return void
+	 */
+	protected static function mark( array $items, $as = self::REPORTED_DONE ) {
+		global $wpdb;
+
+		$queue  = Mailhouse_Queue::table();
+		$groups = array();
+
+		foreach ( $items as $item ) {
+			$groups[ ( $item->opened_at ? 'o' : '-' ) . ( $item->clicked_at ? 'c' : '-' ) ][] = (int) $item->id;
+		}
+
+		foreach ( $groups as $signature => $ids ) {
+			$same  = 'o' === $signature[0] ? 'opened_at IS NOT NULL' : 'opened_at IS NULL';
+			$same .= 'c' === $signature[1] ? ' AND clicked_at IS NOT NULL' : ' AND clicked_at IS NULL';
+
+			foreach ( array_chunk( $ids, 500 ) as $chunk ) {
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+				$wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET reported = %d WHERE reported IN (1, 3) AND {$same} AND id IN (" . implode( ',', $chunk ) . ')', (int) $as ) );
+			}
+		}
+	}
+
+	/**
+	 * How many outcomes the centre has yet to be told, for one campaign or
+	 * for all of them.
+	 *
+	 * @param int $post_id A campaign's post, or 0 for every campaign.
+	 * @return int
+	 */
+	public static function unreported( $post_id = 0 ) {
+		global $wpdb;
+
+		$queue = Mailhouse_Queue::table();
+
+		if ( $post_id ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+			return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$queue} WHERE reported = 1 AND campaign_id = %d", (int) $post_id ) );
+		}
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$queue} WHERE reported = 1" );
+	}
+
+	/**
+	 * What this site says a campaign's state is. One that is held is
+	 * `paused`, whatever it was doing when it was held.
+	 *
+	 * @param object $row The campaign.
+	 * @return string
+	 */
+	protected static function says( $row ) {
+		return '' !== (string) $row->hold && in_array( $row->state, array( 'ready', 'sending' ), true ) ? 'paused' : (string) $row->state;
 	}
 
 	/**
@@ -1021,24 +1828,41 @@ class Mailhouse_Central_Campaigns {
 	}
 
 	/**
-	 * Tell the centre how far a campaign has got.
+	 * Tell the centre how far a campaign has got, and what became of some
+	 * of its messages.
 	 *
-	 * @param object $row     The campaign.
-	 * @param int    $timeout Seconds to wait.
-	 * @return void
+	 * @param object   $row     The campaign.
+	 * @param int      $timeout Seconds to wait.
+	 * @param object[] $items   Rows of the queue whose outcome is owed.
+	 * @return bool Whether the centre was told.
 	 */
-	protected static function report( $row, $timeout ) {
+	protected static function report( $row, $timeout, array $items = array() ) {
+		$says     = self::says( $row );
 		$progress = array(
-			'state'             => (string) $row->state,
+			'state'             => $says,
 			'local_campaign_id' => max( 1, (int) $row->post_id ),
 			'stored'            => self::stored( (int) $row->post_id ),
 			'pending'           => self::unsent( (int) $row->post_id ),
+			// Whether this site records opens and clicks at all. Where it
+			// does not, none is not zero.
+			'tracking'          => array(
+				'opens'  => (bool) mailhouse_option( 'track_opens' ),
+				'clicks' => (bool) mailhouse_option( 'track_clicks' ),
+			),
 		);
+
+		if ( '' !== (string) $row->hold && 'paused' === $says ) {
+			$progress['held_by'] = (string) $row->hold;
+		}
 
 		// What this site arrived at, with every report from ready onwards:
 		// the centre may not have heard that it was ready before it hears
 		// that it is under way, or over.
-		if ( in_array( $row->state, array( 'ready', 'sending', 'completed' ), true ) ) {
+		$events  = array();
+		$unknown = array();
+		$arrived = in_array( $row->state, array( 'ready', 'sending', 'completed' ), true );
+
+		if ( $arrived ) {
 			$unknown = json_decode( (string) $row->unknown, true );
 			$unknown = is_array( $unknown ) ? $unknown : array();
 
@@ -1050,11 +1874,59 @@ class Mailhouse_Central_Campaigns {
 			);
 		}
 
-		if ( '' !== (string) $row->error ) {
-			$progress['error'] = Mailhouse_Central_Protocol::text( (string) $row->error, 300 );
+		// Those the centre listed and this site does not hold: said once,
+		// each as a message that was not sent.
+		$naming = $arrived && $unknown && ! (int) $row->unknown_reported && count( $items ) + count( $unknown ) <= self::REPORT_PAGE;
+
+		if ( $naming ) {
+			foreach ( $unknown as $job ) {
+				if ( is_string( $job ) ) {
+					$events[] = array(
+						'job_id' => $job,
+						'type'   => 'skipped',
+						'at'     => self::at(),
+						'reason' => 'not_held',
+					);
+				}
+			}
 		}
 
-		$answer = Mailhouse_Central_Client::signed( 'POST', '/api/v1/connector/executions/' . $row->execution_id . '/events', array( 'progress' => $progress ), $timeout );
+		$carried = 0;
+
+		foreach ( $items as $item ) {
+			$of = self::events_of( $item );
+
+			if ( count( $events ) + count( $of ) > self::REPORT_PAGE ) {
+				break;
+			}
+
+			$events = array_merge( $events, $of );
+			++$carried;
+		}
+
+		$items = array_slice( $items, 0, $carried );
+
+		// How many outcomes will still be owed once this has been heard:
+		// what the centre goes by when a campaign says it has finished.
+		$owed = 0;
+
+		foreach ( $items as $item ) {
+			$owed += self::REPORTED_OWED === (int) $item->reported ? 1 : 0;
+		}
+
+		$progress['unreported'] = max( 0, self::unreported( (int) $row->post_id ) - $owed ) + ( $arrived && $unknown && ! (int) $row->unknown_reported && ! $naming ? count( $unknown ) : 0 );
+
+		if ( '' !== (string) $row->error ) {
+			$progress['error'] = self::said( (string) $row->error );
+		}
+
+		$body = array( 'progress' => $progress );
+
+		if ( $events ) {
+			$body['events'] = $events;
+		}
+
+		$answer = Mailhouse_Central_Client::signed( 'POST', '/api/v1/connector/executions/' . $row->execution_id . '/events', $body, $timeout );
 
 		$body = ! is_wp_error( $answer ) && is_array( $answer['body'] ) ? $answer['body'] : array();
 		$gone = ! is_wp_error( $answer ) && 404 === (int) $answer['status'] && isset( $body['code'] ) && 'not_found' === $body['code'];
@@ -1064,27 +1936,39 @@ class Mailhouse_Central_Campaigns {
 		if ( is_wp_error( $answer ) || ( 200 !== (int) $answer['status'] && ! $gone ) ) {
 			self::set( (int) $row->id, array( 'next_at' => time() + self::RETRY_AFTER ) );
 
-			return;
+			return false;
 		}
 
 		$status = isset( $body['status'] ) && is_string( $body['status'] ) ? $body['status'] : '';
 
-		self::set(
-			(int) $row->id,
-			array(
-				'reported_state' => (string) $row->state,
-				'reported_at'    => time(),
-				'next_at'        => 0,
-			)
+		// Told. Each message only if it is as it was when it was read.
+		self::mark( $items, $gone ? self::REPORTED_NOBODY : self::REPORTED_DONE );
+
+		$fields = array(
+			'reported_state' => (string) $row->state,
+			'reported_at'    => time(),
+			'next_at'        => 0,
 		);
 
-		// What the centre holds it to be. If that is "not to be sent" and
-		// nothing has gone yet, nothing goes.
+		if ( $naming && ! $gone ) {
+			$fields['unknown_reported'] = 1;
+		}
+
+		self::set( (int) $row->id, $fields );
+
+		// What the centre holds it to be. Called off there, nothing more of
+		// it goes from here, whether or not the request to stop has
+		// arrived. Held or failed there and not begun here, it does not
+		// begin.
 		if ( $gone ) {
 			self::stop( $row, __( 'The centre no longer knows this campaign.', 'mailhouse' ) );
 		} elseif ( in_array( $status, array( 'cancelled', 'blocked', 'failed' ), true ) && in_array( $row->state, array( 'preparing', 'ready' ), true ) ) {
 			self::stop( $row, __( 'The centre called this campaign off.', 'mailhouse' ) );
+		} elseif ( 'cancelled' === $status && 'sending' === $row->state ) {
+			self::cancel( $row, __( 'Called off at the centre.', 'mailhouse' ) );
 		}
+
+		return true;
 	}
 
 	// ---- reading and writing a row ------------------------------------------------------
@@ -1280,8 +2164,7 @@ class Mailhouse_Central_Campaigns {
 	 */
 	public static function panel( $post ) {
 		$row    = self::for_post( $post->ID );
-		$stats  = Mailhouse_Queue::campaign_stats( $post->ID );
-		$status = Mailhouse_Emails::status( $post );
+		$stats = Mailhouse_Queue::campaign_stats( $post->ID );
 
 		if ( ! $row ) {
 			echo '<p>' . esc_html__( 'The connector no longer holds this campaign.', 'mailhouse' ) . '</p>';
@@ -1298,7 +2181,16 @@ class Mailhouse_Central_Campaigns {
 			'failed'    => __( 'Not sent: it could not be prepared.', 'mailhouse' ),
 		);
 
-		echo '<p><strong>' . esc_html( isset( $labels[ $row->state ] ) ? $labels[ $row->state ] : $row->state ) . '</strong></p>';
+		$holders = in_array( $row->state, self::ACTIVE, true ) ? self::holders( $row ) : array();
+		$label   = isset( $labels[ $row->state ] ) ? $labels[ $row->state ] : $row->state;
+
+		if ( in_array( 'centre', $holders, true ) ) {
+			$label = in_array( 'site', $holders, true ) ? __( 'Held, here and at the centre. Both must let it go.', 'mailhouse' ) : __( 'Held at the centre, which is where it is let go.', 'mailhouse' );
+		} elseif ( $holders ) {
+			$label = __( 'Held here.', 'mailhouse' );
+		}
+
+		echo '<p><strong>' . esc_html( $label ) . '</strong></p>';
 
 		printf(
 			'<p>%s</p>',
@@ -1318,6 +2210,32 @@ class Mailhouse_Central_Campaigns {
 			sprintf( esc_html__( 'Nothing is sent after: %s', 'mailhouse' ), esc_html( mailhouse_date( $row->deadline_at ) ) )
 		);
 
+		$notes = array();
+
+		if ( $stats['failed'] ) {
+			/* translators: %s: a number of messages. */
+			$notes[] = sprintf( __( '%s refused', 'mailhouse' ), number_format_i18n( $stats['failed'] ) );
+		}
+
+		if ( $stats['uncertain'] ) {
+			/* translators: %s: a number of messages. */
+			$notes[] = sprintf( __( '%s may or may not have gone, and are not tried again unless the centre says so', 'mailhouse' ), number_format_i18n( $stats['uncertain'] ) );
+		}
+
+		if ( $stats['skipped'] ) {
+			/* translators: %s: a number of messages. */
+			$notes[] = sprintf( __( '%s not sent: no longer subscribed', 'mailhouse' ), number_format_i18n( $stats['skipped'] ) );
+		}
+
+		if ( $stats['cancelled'] ) {
+			/* translators: %s: a number of messages. */
+			$notes[] = sprintf( __( '%s called off', 'mailhouse' ), number_format_i18n( $stats['cancelled'] ) );
+		}
+
+		if ( $notes ) {
+			echo '<p class="description">' . esc_html( implode( '; ', $notes ) ) . '.</p>';
+		}
+
 		if ( '' !== (string) $row->error ) {
 			echo '<p>' . esc_html( (string) $row->error ) . '</p>';
 		}
@@ -1328,9 +2246,10 @@ class Mailhouse_Central_Campaigns {
 
 		echo '<p>';
 
-		if ( 'paused' === $status ) {
+		// This site's administrator lifts this site's hold, and no other.
+		if ( in_array( 'site', $holders, true ) ) {
 			printf( '<a href="%s" class="button button-primary">%s</a> ', esc_url( Mailhouse_Emails::action_url( 'mailhouse_resume_campaign', $post->ID ) ), esc_html__( 'Resume', 'mailhouse' ) );
-		} elseif ( 'sending' === $row->state ) {
+		} elseif ( in_array( $row->state, array( 'ready', 'sending' ), true ) ) {
 			printf( '<a href="%s" class="button">%s</a> ', esc_url( Mailhouse_Emails::action_url( 'mailhouse_pause_campaign', $post->ID ) ), esc_html__( 'Pause', 'mailhouse' ) );
 		}
 

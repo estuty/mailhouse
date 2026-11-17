@@ -223,14 +223,29 @@ plugin is installed.
 - It appears among **Mailhouse → Emails**, labelled *From Mailhouse
   Central*, with its progress. It cannot be edited, re-sent or given other
   recipients here. **You can pause it, resume it or call it off**; what was
-  not sent is kept as a record, and the centre is told when you call it off.
+  not sent is kept as a record, and the centre is told.
+- **The centre is told what became of each message**: that your transport
+  took it, refused it (and what it said), or did not say; that it was not
+  sent because its subscriber had left, or because the newsletter was
+  called off; and, if this site records opens and clicks, each reader's
+  first. It is told by the centre's own number for the message. No address
+  is sent, and any address in what a transport said is taken out first.
+- **The centre can hold it, let it go and call it off too.** Whoever holds
+  it lets it go: the centre cannot lift a hold you put on, and you cannot
+  lift the centre's. Either of you can call it off, and then nothing more
+  of it is sent. Nothing the centre can ask makes this site send to
+  anybody else, sooner, or after the deadline.
+- **A message that may have gone is tried again only if somebody at the
+  centre decides it should be**, knowing that its reader may then get it
+  twice; and never after the deadline, or once the newsletter is called
+  off.
+- **A test.** The centre can ask this site to send a draft to up to five
+  addresses its operator names, so that they see it as your subscribers
+  would: in your template, through your transport. Nothing is created
+  here by a test, and none of your subscribers is written to.
 - A copy of this site at another address (a staging copy, say) sends none
   of it. Disconnecting from the centre calls off whatever of the centre's
   has not been sent.
-
-Not yet: the centre is told how far a newsletter has got, but not what
-became of each message; and it cannot pause or call one off once this site
-has collected it. Both come in the next version.
 
 ## Technical summary
 
@@ -264,7 +279,7 @@ mocks.
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
-| `tests/test-central-campaigns.php` — 168 assertions | pass |
+| `tests/test-central-campaigns.php` — 262 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

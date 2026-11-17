@@ -15,6 +15,12 @@
  * unsubscribed, by a copy of the site, or through the backup transport;
  * and that none of it changes how this site's own campaigns behave.
  *
+ * And what the centre is owed: what became of every message, once, with no
+ * address in it; that whoever holds a campaign is the one to let it go;
+ * that a campaign called off at either end sends nothing more; that a
+ * message which may have gone is tried again only on the centre's word;
+ * and that a test creates nothing.
+ *
  * Usage: php tests/test-central-campaigns.php
  *
  * @package Mailhouse
@@ -114,8 +120,10 @@ final class MHC_Centre {
 
 	/**
 	 * Every execution, by id: `list` (local id => job id), `status`,
-	 * `events` (what the site said), `fetches`, `page` (recipients a
-	 * page), `garble` (serve a page that cannot be read).
+	 * `events` (what the site said of its progress), `outcomes` (what it
+	 * said became of each message, in order), `reports` (how many events
+	 * each request carried), `fetches`, `page` (recipients a page),
+	 * `garble` (serve a page that cannot be read).
 	 *
 	 * @var array[]
 	 */
@@ -198,9 +206,11 @@ final class MHC_Centre {
 
 		self::$executions[ $execution ] = array(
 			'list'    => $list,
-			'status'  => 'awaiting_site',
-			'events'  => array(),
-			'fetches' => 0,
+			'status'   => 'awaiting_site',
+			'events'   => array(),
+			'outcomes' => array(),
+			'reports'  => array(),
+			'fetches'  => 0,
 			'page'    => 3,
 			'garble'  => false,
 		);
@@ -478,26 +488,51 @@ final class MHC_Centre {
 				);
 			}
 
-			$progress              = $json['progress'];
-			$execution['events'][] = $progress;
+			$progress               = $json['progress'];
+			$execution['events'][]  = $progress;
+			$events                 = isset( $json['events'] ) && is_array( $json['events'] ) ? $json['events'] : array();
+			$execution['reports'][] = count( $events );
+			$strangers              = array();
 
-			// As the real centre takes it: ready only with the right count
-			// and the right hash, and nothing once it is stopped.
-			$began = in_array( $progress['state'], array( 'sending', 'completed' ), true );
+			foreach ( $events as $event ) {
+				$execution['outcomes'][] = $event;
 
-			if ( 'awaiting_site' === $execution['status'] && ( 'ready' === $progress['state'] || $began ) ) {
+				if ( ! in_array( $event['job_id'], $execution['list'], true ) ) {
+					$strangers[ $event['job_id'] ] = true;
+				}
+			}
+
+			// As the real centre takes it: that it holds every recipient
+			// only with the right count and the right hash; held and let go
+			// as the site says; called off when the site says so; and
+			// nothing once it is stopped here.
+			$state  = $progress['state'];
+			$has    = in_array( $state, array( 'ready', 'paused', 'sending', 'completed' ), true );
+			$as     = 'ready' === $state ? 'ready' : ( 'paused' === $state ? 'paused' : 'sending' );
+			$status = $execution['status'];
+
+			if ( 'awaiting_site' === $status && $has ) {
 				$agrees = isset( $progress['prepared'] )
 					&& count( $execution['list'] ) === $progress['prepared']['recipients']
 					&& self::list_hash( $execution['list'] ) === $progress['prepared']['hash'];
 
-				$execution['status'] = ! $agrees ? 'blocked' : ( $began ? 'sending' : 'ready' );
-			} elseif ( in_array( $execution['status'], array( 'awaiting_site', 'ready' ), true ) && 'failed' === $progress['state'] ) {
+				$execution['status'] = $agrees ? $as : 'blocked';
+			} elseif ( in_array( $status, array( 'awaiting_site', 'ready' ), true ) && 'failed' === $state ) {
 				$execution['status'] = 'blocked';
-			} elseif ( 'ready' === $execution['status'] && $began ) {
-				$execution['status'] = 'sending';
+			} elseif ( ( 'ready' === $status && $has && 'ready' !== $state ) || ( 'sending' === $status && 'paused' === $state ) || ( 'paused' === $status && $has && 'paused' !== $state ) ) {
+				$execution['status'] = $as;
+			} elseif ( in_array( $status, array( 'awaiting_site', 'ready', 'sending', 'paused' ), true ) && 'cancelled' === $state ) {
+				$execution['status'] = 'cancelled';
 			}
 
-			return self::answer( 200, array( 'status' => $execution['status'] ) );
+			return self::answer(
+				200,
+				array(
+					'status'       => $execution['status'],
+					'accepted'     => count( $events ) - count( $strangers ),
+					'unknown_jobs' => array_keys( $strangers ),
+				)
+			);
 		}
 
 		if ( '/api/v1/connector/sync/events' === $path ) {
@@ -759,6 +794,41 @@ function mhc_connect() {
 }
 
 /**
+ * What the site has said became of an execution's messages: every event,
+ * or those of one kind.
+ */
+function mhc_heard( $execution, $type = '' ) {
+	return array_values(
+		array_filter(
+			MHC_Centre::$executions[ $execution ]['outcomes'],
+			static function ( $event ) use ( $type ) {
+				return '' === $type || $type === $event['type'];
+			}
+		)
+	);
+}
+
+/**
+ * Ask the site to do something, and return its answer.
+ */
+function mhc_ask( $type, array $payload ) {
+	$envelope = MHC_Centre::issue( $type, $payload );
+
+	mhc_tick();
+
+	return MHC_Centre::answer_for( $envelope );
+}
+
+/**
+ * Record an open or a click of a queue row, as the tracking endpoint does.
+ */
+function mhc_engage( $kind, $queue_id ) {
+	$method = new ReflectionMethod( 'Mailhouse_Tracking', 'open' === $kind ? 'record_open' : 'record_click' );
+
+	$method->invoke( null, (int) $queue_id );
+}
+
+/**
  * Report in and deal with whatever the centre is holding.
  */
 function mhc_tick() {
@@ -975,7 +1045,7 @@ check( 'and holds nowhere an address could be', ! array_intersect( array( 'email
 check( 'an execution can be written down only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$remote_table} WHERE Key_name = 'execution_id' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
 check( 'the queue records when a message was handed to the transport', in_array( 'attempt_started_at', (array) $wpdb->get_col( "SHOW COLUMNS FROM {$queue_table}" ), true ) ); // phpcs:ignore WordPress.DB
 check( 'a job id can be in the queue only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$queue_table} WHERE Key_name = 'remote_job' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
-check( 'the schema version is 1.5.0', '1.5.0' === Mailhouse_Install::DB_VERSION && '1.5.0' === get_option( 'mailhouse_db_version' ) );
+check( 'the schema version is 1.6.0', '1.6.0' === Mailhouse_Install::DB_VERSION && '1.6.0' === get_option( 'mailhouse_db_version' ) );
 check( 'uninstalling removes the table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'remote_campaigns', 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
 
 // ---------------------------------------------------------------------------
@@ -1551,13 +1621,14 @@ mhc_set( $payload['execution_id'], array( 'next_at' => 0 ) );
 Mailhouse_Central_Campaigns::network();
 check( 'and is said again', 'ready' === mhc_row( $payload['execution_id'] )->reported_state && array( 'ready' ) === MHC_Centre::said( $payload['execution_id'] ) );
 
-// Once it has begun it is this site's to finish.
+// Once it has begun, a centre that merely holds it does not stop it: it
+// is this site's to finish. Only "called off" does, further on.
 $five                           = mhc_people( 5 );
 list( $payload, $row, $post_g ) = mhc_prepared( $five );
-MHC_Centre::$executions[ $payload['execution_id'] ]['status'] = 'cancelled';
+MHC_Centre::$executions[ $payload['execution_id'] ]['status'] = 'blocked';
 mhc_set( $payload['execution_id'], array( 'reported_state' => '' ) );
 Mailhouse_Central_Campaigns::network();
-check( 'one that has begun is not stopped by an answer', 'sending' === mhc_row( $payload['execution_id'] )->state && 'pending:5' === mhc_tally( $post_g ) );
+check( 'one that has begun is not stopped by a centre that holds it', 'sending' === mhc_row( $payload['execution_id'] )->state && 'pending:5' === mhc_tally( $post_g ) );
 
 // A centre that no longer knows a campaign changes nothing about one that
 // is under way, or over.
@@ -1751,6 +1822,7 @@ foreach ( mhc_queue( $post_d ) as $queued ) {
 
 check( 'a message that was being handed over when its run died is held as uncertain', 'uncertain' === $rows[ $begun[0] ]->status && 'uncertain' === $rows[ $begun[1] ]->status && 1 === (int) $rows[ $begun[0] ]->reported && '' !== (string) $rows[ $begun[0] ]->error && null === $rows[ $begun[0] ]->claim_token );
 check( 'one that was claimed and never begun goes back to be sent', 'pending' === $rows[ $never ]->status && null === $rows[ $never ]->claim_token );
+check( 'the one that was handed over was tried, and that is counted; the one never begun was not', 1 === (int) $rows[ $begun[0] ]->attempts && 1 === (int) $rows[ $begun[1] ]->attempts && 0 === (int) $rows[ $never ]->attempts );
 
 mhc_send();
 check( 'the uncertain ones are not sent again; the other three go', 3 === count( $GLOBALS['mhc_handed'] ) && 'sent:3 uncertain:2' === mhc_tally( $post_d ), mhc_tally( $post_d ) );
@@ -1845,6 +1917,724 @@ check( 'and nothing more goes', 0 === count( $GLOBALS['mhc_handed'] ) );
 
 Mailhouse_Central_Campaigns::network();
 check( 'the centre is told it was called off here', 'cancelled' === MHC_Centre::last_said( $payload['execution_id'] )['state'] && false !== strpos( MHC_Centre::last_said( $payload['execution_id'] )['error'], 'administrator' ) );
+
+// ---------------------------------------------------------------------------
+echo "\nWhat became of each message is told to the centre\n";
+
+Mailhouse_Settings::set( array( 'fallback_mailer' => '' ) );
+Mailhouse_Settings::flush();
+$GLOBALS['mhc_transport'] = null;
+
+// Whatever earlier parts of this file left owed is told first, and set aside.
+Mailhouse_Central_Campaigns::network();
+// phpcs:ignore WordPress.DB
+$wpdb->query( "UPDATE {$queue_table} SET reported = 2 WHERE reported IN (1, 3)" );
+
+$six                            = mhc_people( 6 );
+list( $payload, $row, $post_r ) = mhc_prepared( $six );
+$exec_r                         = $payload['execution_id'];
+$jobs_r                         = MHC_Centre::$executions[ $exec_r ]['list'];
+$emails_r                       = array();
+
+foreach ( $six as $id ) {
+	$emails_r[ $id ] = Mailhouse_Subscribers::get( $id )->email;
+}
+
+// One leaves after the list was fixed; one is refused for good, by a
+// transport that quotes the address back; one is unclear.
+Mailhouse_Subscribers::update( $six[1], array( 'status' => 'unsubscribed' ) );
+$refusing = static function ( $pre, $args, $url ) use ( $emails_r, $six ) {
+	return false !== strpos( $url, 'sendgrid' ) && false !== strpos( (string) $args['body'], $emails_r[ $six[2] ] )
+		? mhc_reply( 400, array( 'errors' => array( array( 'message' => 'The address <' . $emails_r[ $six[2] ] . '> does not exist' ) ) ) )
+		: $pre;
+};
+add_filter( 'pre_http_request', $refusing, 5, 3 );
+$GLOBALS['mhc_transport'] = static function ( $to ) use ( $emails_r, $six ) {
+	return $to === $emails_r[ $six[3] ] ? 'unclear' : 'accept';
+};
+mhc_send();
+remove_filter( 'pre_http_request', $refusing, 5 );
+$GLOBALS['mhc_transport'] = null;
+
+$rows = mhc_queue( $post_r );
+check( 'what was refused keeps what the transport said, and that it was for good', 'failed' === $rows[ $six[2] ]->status && 'permanent' === $rows[ $six[2] ]->error_class && false !== strpos( (string) $rows[ $six[2] ]->error, 'does not exist' ), wp_json_encode( $rows[ $six[2] ] ) );
+
+MHC_Centre::$requests = array();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+
+$heard = array();
+
+foreach ( mhc_heard( $exec_r ) as $event ) {
+	$heard[ $event['job_id'] ][] = $event;
+}
+
+$one = static function ( $local ) use ( $heard, $jobs_r ) {
+	return isset( $heard[ $jobs_r[ $local ] ] ) && 1 === count( $heard[ $jobs_r[ $local ] ] ) ? $heard[ $jobs_r[ $local ] ][0] : array( 'type' => 'none' );
+};
+
+check( 'each message is told once, by the centre’s own name for it', 6 === count( $heard ) && 6 === count( mhc_heard( $exec_r ) ), wp_json_encode( mhc_heard( $exec_r ) ) );
+check( 'one the transport took: accepted, the first try, with what the transport called it', 'accepted' === $one( $six[0] )['type'] && 1 === $one( $six[0] )['attempt'] && 'sg-' . md5( $emails_r[ $six[0] ] ) === $one( $six[0] )['provider_message_id'] && 1 === preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $one( $six[0] )['at'] ), wp_json_encode( $one( $six[0] ) ) );
+check( 'one who had left: skipped, and why', 'skipped' === $one( $six[1] )['type'] && 'not_subscribed' === $one( $six[1] )['reason'] );
+check( 'one refused for good: failed, permanent', 'failed' === $one( $six[2] )['type'] && 'permanent' === $one( $six[2] )['class'] && 1 === $one( $six[2] )['attempt'] );
+check( 'and what the transport said is passed on without the address in it', false !== strpos( $one( $six[2] )['error'], 'does not exist' ) && false !== strpos( $one( $six[2] )['error'], '[address]' ) && false === strpos( $one( $six[2] )['error'], '@' ), $one( $six[2] )['error'] );
+check( 'one that may or may not have gone: uncertain', 'uncertain' === $one( $six[3] )['type'] && 1 === $one( $six[3] )['attempt'] && '' !== $one( $six[3] )['error'] );
+
+$addressed = false;
+
+foreach ( MHC_Centre::$requests as $request ) {
+	if ( false !== strpos( $request['path'], '/events' ) && false !== strpos( wp_json_encode( $request['json'] ), '@' ) ) {
+		$addressed = true;
+	}
+}
+
+check( 'no report carries an address', ! $addressed );
+
+$last = MHC_Centre::last_said( $exec_r );
+check( 'the report says the campaign has finished, and that nothing more is owed', 'completed' === $last['state'] && 0 === $last['unreported'] && 0 === $last['pending'], wp_json_encode( $last ) );
+check( 'and whether this site records opens and clicks at all', array( 'opens' => false, 'clicks' => false ) === $last['tracking'], wp_json_encode( $last ) );
+
+$rows = mhc_queue( $post_r );
+$told = true;
+
+foreach ( $rows as $each ) {
+	$told = $told && 2 === (int) $each->reported;
+}
+
+check( 'what has been told is marked as told', $told );
+
+$before = count( mhc_heard( $exec_r ) );
+mhc_set( $exec_r, array( 'reported_state' => '' ) );
+Mailhouse_Central_Campaigns::network();
+check( 'and is not told again', $before === count( mhc_heard( $exec_r ) ) );
+
+// A centre that cannot be reached is told later, and told everything.
+$three                          = mhc_people( 3 );
+list( $payload, $row, $post_d ) = mhc_prepared( $three );
+$exec_d                         = $payload['execution_id'];
+mhc_send();
+MHC_Centre::$mode = 'down';
+Mailhouse_Central_Campaigns::network();
+$owed = 0;
+
+foreach ( mhc_queue( $post_d ) as $each ) {
+	$owed += 1 === (int) $each->reported ? 1 : 0;
+}
+
+check( 'a report the centre did not hear leaves every message owed', 3 === $owed && 0 === count( mhc_heard( $exec_d ) ) && (int) mhc_row( $exec_d )->next_at > time() );
+MHC_Centre::$mode = 'ok';
+mhc_set( $exec_d, array( 'next_at' => 0 ) );
+Mailhouse_Central_Campaigns::network();
+check( 'and is made again when it can be', 3 === count( mhc_heard( $exec_d, 'accepted' ) ) );
+
+// Something in between that answers 404 is not the centre saying anything.
+$three                          = mhc_people( 3 );
+list( $payload, $row, $post_l ) = mhc_prepared( $three );
+$exec_l                         = $payload['execution_id'];
+mhc_send();
+MHC_Centre::$mode = 'lost';
+Mailhouse_Central_Campaigns::network();
+$owed = 0;
+
+foreach ( mhc_queue( $post_l ) as $each ) {
+	$owed += 1 === (int) $each->reported ? 1 : 0;
+}
+
+check( 'a 404 from something in between leaves every message owed', 3 === $owed );
+MHC_Centre::$mode = 'ok';
+
+// A centre that says, in as many words, that it knows no such campaign.
+unset( MHC_Centre::$executions[ $exec_l ] );
+mhc_set( $exec_l, array( 'next_at' => 0 ) );
+Mailhouse_Central_Campaigns::network();
+$nobody = 0;
+
+foreach ( mhc_queue( $post_l ) as $each ) {
+	$nobody += 9 === (int) $each->reported ? 1 : 0;
+}
+
+check( 'a centre that no longer knows the campaign is not told again and again', 3 === $nobody && 'sent:3' === mhc_tally( $post_l ) );
+
+// More than one request's worth.
+$one_r                          = mhc_people( 1 );
+list( $payload, $row, $post_m ) = mhc_prepared( $one_r );
+$exec_m                         = $payload['execution_id'];
+mhc_send();
+$values = array();
+
+for ( $i = 0; $i < 1049; $i++ ) {
+	$values[] = $wpdb->prepare( '(%d, %d, %s, %s, %s, %s, %s, 1, 1)', $post_m, 9000000 + $i, 'nobody', 'sent', mailhouse_now(), mailhouse_now(), wp_generate_uuid4() );
+}
+
+// phpcs:ignore WordPress.DB
+$wpdb->query( "INSERT INTO {$queue_table} (campaign_id, subscriber_id, email, status, scheduled_at, sent_at, remote_job_id, attempts, reported) VALUES " . implode( ', ', $values ) );
+Mailhouse_Central_Campaigns::network();
+$sizes = array_values( array_filter( MHC_Centre::$executions[ $exec_m ]['reports'] ) );
+// phpcs:ignore WordPress.DB
+$left = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$queue_table} WHERE campaign_id = %d AND reported <> 2", $post_m ) );
+check( 'more than a thousand are told a thousand at a time, in one run', array( 1000, 50 ) === $sizes && 0 === $left, wp_json_encode( $sizes ) . ' left ' . $left );
+$owing = array();
+
+foreach ( MHC_Centre::$executions[ $exec_m ]['reports'] as $at => $carried ) {
+	if ( $carried ) {
+		$owing[] = MHC_Centre::$executions[ $exec_m ]['events'][ $at ]['unreported'];
+	}
+}
+
+check( 'and with each the site says how many it has still to tell: fifty, then none', array( 50, 0 ) === $owing, wp_json_encode( $owing ) );
+// phpcs:ignore WordPress.DB
+$wpdb->query( $wpdb->prepare( "DELETE FROM {$queue_table} WHERE campaign_id = %d AND subscriber_id >= 9000000", $post_m ) );
+
+// Recipients this site does not hold are said once, each as not sent.
+$four                           = mhc_people( 4 );
+$strangers                      = array( 8800001, 8800002 );
+list( $payload, $row, $post_u ) = mhc_prepared( array_merge( $four, $strangers ) );
+$exec_u                         = $payload['execution_id'];
+$not_held                       = mhc_heard( $exec_u, 'skipped' );
+check(
+	'somebody the centre listed and this site does not hold is said to be not sent, by name of the message',
+	2 === count( $not_held ) && 'not_held' === $not_held[0]['reason']
+	&& array( MHC_Centre::$executions[ $exec_u ]['list'][8800001], MHC_Centre::$executions[ $exec_u ]['list'][8800002] ) === wp_list_pluck( $not_held, 'job_id' )
+	&& 1 === (int) mhc_row( $exec_u )->unknown_reported,
+	wp_json_encode( $not_held )
+);
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+Mailhouse_Central_Campaigns::network();
+check( 'once, and the rest as they went', 2 === count( mhc_heard( $exec_u, 'skipped' ) ) && 4 === count( mhc_heard( $exec_u, 'accepted' ) ) && 0 === MHC_Centre::last_said( $exec_u )['unreported'] );
+
+// A refusal for now, three times: failed, transient, with the real reason.
+$one_t                          = mhc_people( 1 );
+list( $payload, $row, $post_x ) = mhc_prepared( $one_t );
+$exec_x                         = $payload['execution_id'];
+$GLOBALS['mhc_transport']       = static function () {
+	return 'later';
+};
+
+for ( $i = 0; $i < 3; $i++ ) {
+	mhc_make_due( $post_x );
+	mhc_send();
+}
+
+$GLOBALS['mhc_transport'] = null;
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+$failed = mhc_heard( $exec_x, 'failed' );
+check( 'one refused every time it was tried: failed, transient, the third try, with what the transport said', 1 === count( $failed ) && 'transient' === $failed[0]['class'] && 3 === $failed[0]['attempt'] && '' !== $failed[0]['error'] && false === strpos( $failed[0]['error'], 'See the email log' ), wp_json_encode( $failed ) );
+
+// ---------------------------------------------------------------------------
+echo "\nOpens and clicks\n";
+
+Mailhouse_Settings::set(
+	array(
+		'track_opens'  => true,
+		'track_clicks' => true,
+	)
+);
+Mailhouse_Settings::flush();
+
+$three                          = mhc_people( 3 );
+list( $payload, $row, $post_o ) = mhc_prepared( $three );
+$exec_o                         = $payload['execution_id'];
+$jobs_o                         = MHC_Centre::$executions[ $exec_o ]['list'];
+mhc_send();
+$rows = mhc_queue( $post_o );
+
+// Opened before the centre had been told it went: one report carries both.
+mhc_engage( 'open', $rows[ $three[0] ]->id );
+check( 'an open of a message not yet reported changes nothing about what is owed', 1 === (int) mhc_queue( $post_o )[ $three[0] ]->reported );
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+$opened = mhc_heard( $exec_o, 'opened' );
+check( 'the report of the message carries its open', 3 === count( mhc_heard( $exec_o, 'accepted' ) ) && 1 === count( $opened ) && $jobs_o[ $three[0] ] === $opened[0]['job_id'] && 1 === preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $opened[0]['at'] ), wp_json_encode( $opened ) );
+check( 'and says this site records them', array( 'opens' => true, 'clicks' => true ) === MHC_Centre::last_said( $exec_o )['tracking'] );
+
+// Opened afterwards: owed again, told once.
+mhc_engage( 'open', $rows[ $three[1] ]->id );
+check( 'a first open after the report is owed to the centre', 3 === (int) mhc_queue( $post_o )[ $three[1] ]->reported );
+mhc_engage( 'open', $rows[ $three[0] ]->id );
+check( 'a second open of the same message is not', 2 === (int) mhc_queue( $post_o )[ $three[0] ]->reported && 2 === (int) mhc_queue( $post_o )[ $three[0] ]->opens );
+Mailhouse_Central_Campaigns::network();
+check( 'it is told, and the message is not reported as sent a second time', 2 === count( mhc_heard( $exec_o, 'opened' ) ) && 3 === count( mhc_heard( $exec_o, 'accepted' ) ) && 2 === (int) mhc_queue( $post_o )[ $three[1] ]->reported );
+
+// A click is an open as well.
+mhc_engage( 'click', $rows[ $three[2] ]->id );
+mhc_engage( 'click', $rows[ $three[1] ]->id );
+Mailhouse_Central_Campaigns::network();
+$clicked = wp_list_pluck( mhc_heard( $exec_o, 'clicked' ), 'job_id' );
+sort( $clicked );
+$expect = array( $jobs_o[ $three[1] ], $jobs_o[ $three[2] ] );
+sort( $expect );
+check( 'a first click is told, with the open it implies', $expect === $clicked && in_array( $jobs_o[ $three[2] ], wp_list_pluck( mhc_heard( $exec_o, 'opened' ), 'job_id' ), true ), wp_json_encode( $clicked ) );
+
+// An open that lands while the report is on its way is not lost.
+$one_o                          = mhc_people( 1 );
+list( $payload, $row, $post_y ) = mhc_prepared( $one_o );
+$exec_y                         = $payload['execution_id'];
+mhc_send();
+$row_y   = mhc_queue( $post_y )[ $one_o[0] ];
+$midway  = false;
+$landing = static function ( $pre, $args, $url ) use ( &$midway, $row_y, $exec_y ) {
+	if ( ! $midway && false !== strpos( $url, $exec_y . '/events' ) && false !== strpos( (string) $args['body'], '"accepted"' ) ) {
+		$midway = true;
+		mhc_engage( 'open', $row_y->id );
+	}
+
+	return $pre;
+};
+add_filter( 'pre_http_request', $landing, 5, 3 );
+Mailhouse_Central_Campaigns::network();
+remove_filter( 'pre_http_request', $landing, 5 );
+check( 'an open that lands while the report is on its way leaves the message owed', $midway && 0 === count( mhc_heard( $exec_y, 'opened' ) ) && 2 !== (int) mhc_queue( $post_y )[ $one_o[0] ]->reported, (string) mhc_queue( $post_y )[ $one_o[0] ]->reported );
+Mailhouse_Central_Campaigns::network();
+check( 'and is told the next time', 1 === count( mhc_heard( $exec_y, 'opened' ) ) && 2 === (int) mhc_queue( $post_y )[ $one_o[0] ]->reported );
+
+// This site's own campaign owes the centre nothing.
+$own_id = wp_insert_post(
+	array(
+		'post_type'    => Mailhouse_Emails::POST_TYPE,
+		'post_status'  => 'publish',
+		'post_title'   => 'MHC own, tracked',
+		'post_content' => '<p>Ours.</p>',
+	)
+);
+Mailhouse_Queue::enqueue_one( $own_id, $one_o[0], Mailhouse_Subscribers::get( $one_o[0] )->email );
+mhc_send();
+$own_row = mhc_queue( $own_id )[ $one_o[0] ];
+mhc_engage( 'open', $own_row->id );
+mhc_engage( 'click', $own_row->id );
+$own_row = mhc_queue( $own_id )[ $one_o[0] ];
+check( 'an open of this site’s own campaign is counted here and owed to nobody', 0 === (int) $own_row->reported && 1 === (int) $own_row->opens && 1 === (int) $own_row->clicks && null === $own_row->remote_job_id );
+
+Mailhouse_Settings::set(
+	array(
+		'track_opens'  => false,
+		'track_clicks' => false,
+	)
+);
+Mailhouse_Settings::flush();
+
+// ---------------------------------------------------------------------------
+echo "\nHeld, and let go\n";
+
+$five                           = mhc_people( 5 );
+list( $payload, $row, $post_h ) = mhc_prepared( $five );
+$exec_h                         = $payload['execution_id'];
+Mailhouse_Settings::set( array( 'batch_size' => 2 ) );
+Mailhouse_Settings::flush();
+mhc_send();
+Mailhouse_Settings::set( array( 'batch_size' => 50 ) );
+Mailhouse_Settings::flush();
+
+Mailhouse_Central_Campaigns::hold_locally( $post_h );
+check( 'held, what has not gone is out of the queue at once, and the record says it is paused', 'paused:3 sent:2' === mhc_tally( $post_h ) && 'paused' === get_post_meta( $post_h, '_mailhouse_status', true ), mhc_tally( $post_h ) );
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+check( 'held by this site’s administrator, nothing more of it goes', 0 === count( $GLOBALS['mhc_handed'] ) && 'paused:3 sent:2' === mhc_tally( $post_h ) && 'site' === mhc_row( $exec_h )->hold, mhc_tally( $post_h ) );
+Mailhouse_Central_Campaigns::local();
+check( 'and it is not taken to have finished', 'sending' === mhc_row( $exec_h )->state );
+Mailhouse_Central_Campaigns::network();
+$last = MHC_Centre::last_said( $exec_h );
+check( 'the centre is told it is held, and by whom', 'paused' === $last['state'] && 'site' === $last['held_by'] && 'paused' === MHC_Centre::$executions[ $exec_h ]['status'], wp_json_encode( $last ) );
+
+// The centre cannot lift a hold this site's administrator put on.
+$answer = mhc_ask( 'campaign.resume', array( 'execution_id' => $exec_h ) );
+mhc_send();
+check( 'the centre asking for it to be let go does not lift this site’s hold', mhc_is( $answer, 'applied', array( 'noop' => true, 'held_by' => 'site' ) ) && 'site' === mhc_row( $exec_h )->hold && 0 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $answer ) );
+
+// A message that comes back to the queue while it is held waits too.
+$one_h = mhc_queue( $post_h )[ $five[2] ];
+// phpcs:ignore WordPress.DB
+$wpdb->update( $queue_table, array( 'status' => 'pending', 'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() - 60 ) ), array( 'id' => $one_h->id ) );
+mhc_send();
+check( 'a message that finds its way back to the queue while held is not sent', 0 === count( $GLOBALS['mhc_handed'] ) && 'paused' === mhc_queue( $post_h )[ $five[2] ]->status );
+
+// The centre holds it as well: both must let go.
+$answer = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_h ) );
+check( 'the centre can hold it too', mhc_is( $answer, 'applied', array( 'held' => true ) ) && 'both' === mhc_row( $exec_h )->hold, wp_json_encode( $answer ) );
+$answer = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_h ) );
+check( 'asked twice, the second does nothing', mhc_is( $answer, 'applied', array( 'noop' => true ) ) && 'both' === mhc_row( $exec_h )->hold );
+Mailhouse_Central_Campaigns::network();
+check( 'and the centre is told both hold it', 'both' === MHC_Centre::last_said( $exec_h )['held_by'] );
+
+$free = Mailhouse_Central_Campaigns::release_locally( $post_h );
+check( 'let go by one of two who hold it, nothing goes back to the queue', 'paused:3 sent:2' === mhc_tally( $post_h ) && 'paused' === get_post_meta( $post_h, '_mailhouse_status', true ), mhc_tally( $post_h ) );
+mhc_send();
+check( 'this site’s administrator lets go, and the centre’s hold stands', false === $free && 'centre' === mhc_row( $exec_h )->hold && 0 === count( $GLOBALS['mhc_handed'] ) && 'paused:3 sent:2' === mhc_tally( $post_h ) );
+
+ob_start();
+Mailhouse_Central_Campaigns::panel( get_post( $post_h ) );
+$panel = ob_get_clean();
+check( 'the record says it is held at the centre, and offers no way to let it go here', false !== strpos( $panel, 'Held at the centre' ) && false === strpos( $panel, 'mailhouse_resume_campaign' ) && false !== strpos( $panel, 'mailhouse_cancel_campaign' ), wp_strip_all_tags( $panel ) );
+check( 'a second "let go" here does nothing', false === Mailhouse_Central_Campaigns::release_locally( $post_h ) && 'centre' === mhc_row( $exec_h )->hold );
+
+$answer = mhc_ask( 'campaign.resume', array( 'execution_id' => $exec_h ) );
+check( 'the centre lets go, and nobody holds it', mhc_is( $answer, 'applied', array( 'held_by' => '' ) ) && '' === mhc_row( $exec_h )->hold && 'pending:3 sent:2' === mhc_tally( $post_h ), wp_json_encode( $answer ) . mhc_tally( $post_h ) );
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+check( 'the rest goes, once each, and the centre hears it is no longer held', 3 === count( $GLOBALS['mhc_handed'] ) && 'sent:5' === mhc_tally( $post_h ) && 'completed' === mhc_row( $exec_h )->state && 'completed' === MHC_Centre::last_said( $exec_h )['state'] && ! isset( MHC_Centre::last_said( $exec_h )['held_by'] ) && 'sending' === MHC_Centre::$executions[ $exec_h ]['status'], wp_json_encode( MHC_Centre::said( $exec_h ) ) );
+
+// Held before its time: its time comes and goes.
+$three                          = mhc_people( 3 );
+list( $payload, $row, $post_b ) = mhc_prepared( $three, array( 'start' => time() + HOUR_IN_SECONDS ) );
+$exec_b                         = $payload['execution_id'];
+$answer                         = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_b ) );
+mhc_set( $exec_b, array( 'start_at' => gmdate( 'Y-m-d H:i:s', time() - 60 ) ) );
+Mailhouse_Central_Campaigns::local();
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+check( 'one held before its time does not start when its time comes', mhc_is( $answer, 'applied', array( 'held' => true ) ) && 'ready' === mhc_row( $exec_b )->state && 'waiting:3' === mhc_tally( $post_b ) && 0 === count( $GLOBALS['mhc_handed'] ) );
+Mailhouse_Central_Campaigns::network();
+$last = MHC_Centre::last_said( $exec_b );
+check( 'the centre is told it is held, with what this site arrived at', 'paused' === $last['state'] && 'centre' === $last['held_by'] && 3 === $last['prepared']['recipients'], wp_json_encode( $last ) );
+$answer = mhc_ask( 'campaign.resume', array( 'execution_id' => $exec_b ) );
+Mailhouse_Central_Campaigns::local();
+mhc_send();
+check( 'let go, it starts at once: its time has come', 'sending' === mhc_row( $exec_b )->state && 3 === count( $GLOBALS['mhc_handed'] ) && 'sent:3' === mhc_tally( $post_b ), mhc_tally( $post_b ) );
+
+// Held while its recipients are still being fetched.
+$three                   = mhc_people( 3 );
+list( $payload, $answer ) = mhc_hand_over( $three );
+$exec_p                  = $payload['execution_id'];
+$answer                  = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_p ) );
+Mailhouse_Central_Campaigns::network();
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+$row = mhc_row( $exec_p );
+check( 'one held while it is being prepared is prepared, and does not start', mhc_is( $answer, 'applied', array( 'held' => true ) ) && 'ready' === $row->state && 'centre' === $row->hold && 0 === count( $GLOBALS['mhc_handed'] ) && 'paused' === MHC_Centre::$executions[ $exec_p ]['status'], $row->state . ' ' . MHC_Centre::$executions[ $exec_p ]['status'] );
+
+// A hold does not outlast the deadline.
+mhc_set( $exec_p, array( 'deadline_at' => gmdate( 'Y-m-d H:i:s', time() - 60 ) ) );
+Mailhouse_Central_Campaigns::local();
+check( 'a held campaign still ends at its deadline', 'cancelled' === mhc_row( $exec_p )->state && '' === mhc_row( $exec_p )->hold && 'cancelled:3' === mhc_tally( (int) $row->post_id ) );
+
+// One that is over, and one this site never had.
+Mailhouse_Central_Campaigns::cancel_locally( $post_h );
+$row = mhc_row( $exec_h );
+check( 'called off here after it had finished, it is still finished, and says nothing else', 'completed' === $row->state && '' === (string) $row->error && 'sent:5' === mhc_tally( $post_h ), $row->state . ' ' . $row->error );
+$answer = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_h ) );
+check( 'asked to hold one that is over, it says so and does nothing', mhc_is( $answer, 'applied', array( 'noop' => true, 'state' => 'completed' ) ) && '' === mhc_row( $exec_h )->hold );
+$answer = mhc_ask( 'campaign.pause', array( 'execution_id' => wp_generate_uuid4() ) );
+check( 'asked about a campaign it never had, it says so', mhc_is( $answer, 'rejected', array( 'reason' => 'not_found' ) ) );
+
+// ---------------------------------------------------------------------------
+echo "\nCalled off at the centre\n";
+
+$five                           = mhc_people( 5 );
+list( $payload, $row, $post_c ) = mhc_prepared( $five );
+$exec_c                         = $payload['execution_id'];
+Mailhouse_Settings::set( array( 'batch_size' => 2 ) );
+Mailhouse_Settings::flush();
+mhc_send();
+Mailhouse_Settings::set( array( 'batch_size' => 50 ) );
+Mailhouse_Settings::flush();
+
+$answer = mhc_ask( 'campaign.cancel', array( 'execution_id' => $exec_c ) );
+check( 'called off part-way, it says how many had gone and how many were stopped', mhc_is( $answer, 'applied', array( 'sent' => 2, 'cancelled' => 3 ) ) && 'cancelled' === mhc_row( $exec_c )->state && 'cancelled:3 sent:2' === mhc_tally( $post_c ), wp_json_encode( $answer ) );
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+check( 'nothing more of it goes', 0 === count( $GLOBALS['mhc_handed'] ) );
+Mailhouse_Central_Campaigns::network();
+check( 'the centre hears what became of every message: two taken, three called off', 2 === count( mhc_heard( $exec_c, 'accepted' ) ) && 3 === count( mhc_heard( $exec_c, 'cancelled' ) ) && 'cancelled' === MHC_Centre::last_said( $exec_c )['state'] && 0 === MHC_Centre::last_said( $exec_c )['unreported'], wp_json_encode( MHC_Centre::last_said( $exec_c ) ) );
+$answer = mhc_ask( 'campaign.cancel', array( 'execution_id' => $exec_c ) );
+check( 'asked again, it does nothing', mhc_is( $answer, 'applied', array( 'noop' => true, 'state' => 'cancelled' ) ) );
+$answer = mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_c ) );
+check( 'and it cannot be held, or let go, afterwards', mhc_is( $answer, 'applied', array( 'noop' => true ) ) && '' === mhc_row( $exec_c )->hold );
+
+// The request to stop has not arrived, and the centre's answer says it all the same.
+$five                           = mhc_people( 5 );
+list( $payload, $row, $post_e ) = mhc_prepared( $five );
+$exec_e                         = $payload['execution_id'];
+Mailhouse_Settings::set( array( 'batch_size' => 2 ) );
+Mailhouse_Settings::flush();
+mhc_send();
+Mailhouse_Settings::set( array( 'batch_size' => 50 ) );
+Mailhouse_Settings::flush();
+MHC_Centre::$executions[ $exec_e ]['status'] = 'cancelled';
+Mailhouse_Central_Campaigns::network();
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+check( 'a campaign under way stops when the centre’s answer says it is called off', 'cancelled' === mhc_row( $exec_e )->state && 'cancelled:3 sent:2' === mhc_tally( $post_e ) && 0 === count( $GLOBALS['mhc_handed'] ), mhc_row( $exec_e )->state . ' ' . mhc_tally( $post_e ) );
+Mailhouse_Central_Campaigns::network();
+check( 'and the three it did not send are told as called off', 3 === count( mhc_heard( $exec_e, 'cancelled' ) ) && 2 === count( mhc_heard( $exec_e, 'accepted' ) ) );
+
+// A held campaign can be called off.
+$three                          = mhc_people( 3 );
+list( $payload, $row, $post_k ) = mhc_prepared( $three, array( 'start' => time() + HOUR_IN_SECONDS ) );
+$exec_k                         = $payload['execution_id'];
+mhc_ask( 'campaign.pause', array( 'execution_id' => $exec_k ) );
+$answer = mhc_ask( 'campaign.cancel', array( 'execution_id' => $exec_k ) );
+check( 'one that is held and has not begun can be called off', mhc_is( $answer, 'applied', array( 'sent' => 0, 'cancelled' => 3 ) ) && 'cancelled' === mhc_row( $exec_k )->state && '' === mhc_row( $exec_k )->hold && 'cancelled:3' === mhc_tally( $post_k ) );
+
+// ---------------------------------------------------------------------------
+echo "\nA message that may or may not have gone is tried again only on the centre’s word\n";
+
+$four                           = mhc_people( 4 );
+list( $payload, $row, $post_n ) = mhc_prepared( $four );
+$exec_n                         = $payload['execution_id'];
+$jobs_n                         = MHC_Centre::$executions[ $exec_n ]['list'];
+$emails_n                       = array();
+
+foreach ( $four as $id ) {
+	$emails_n[ $id ] = Mailhouse_Subscribers::get( $id )->email;
+}
+
+$GLOBALS['mhc_transport'] = static function ( $to ) use ( $emails_n, $four ) {
+	return $to === $emails_n[ $four[0] ] ? 'accept' : 'unclear';
+};
+mhc_send();
+$GLOBALS['mhc_transport'] = null;
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+check( 'three are uncertain, the campaign is over, and the centre knows', 'sent:1 uncertain:3' === mhc_tally( $post_n ) && 'completed' === mhc_row( $exec_n )->state && 3 === count( mhc_heard( $exec_n, 'uncertain' ) ), mhc_tally( $post_n ) );
+
+$GLOBALS['mhc_handed'] = array();
+
+for ( $i = 0; $i < 3; $i++ ) {
+	mhc_make_due( $post_n );
+	mhc_send();
+	Mailhouse_Queue::reap_stale();
+}
+
+check( 'left to itself, this site never tries one of them again', 0 === count( $GLOBALS['mhc_handed'] ) && 'sent:1 uncertain:3' === mhc_tally( $post_n ) );
+
+// One is sent again; one is counted as sent; one is given up.
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_n,
+		'resolution'   => 'resend',
+		// One of them, and one that went the first time.
+		'job_ids'      => array( $jobs_n[ $four[1] ], $jobs_n[ $four[0] ] ),
+	)
+);
+$rows = mhc_queue( $post_n );
+check( 'on the centre’s word, the one named goes back to be sent', mhc_is( $answer, 'applied', array( 'changed' => 1 ) ) && 'pending' === $rows[ $four[1] ]->status && 0 === (int) $rows[ $four[1] ]->reported && 1 === (int) $rows[ $four[1] ]->attempts && 'sending' === mhc_row( $exec_n )->state, wp_json_encode( $answer ) );
+check( 'one named that had already gone is not sent again: the centre is told again that it went', 'sent' === $rows[ $four[0] ]->status && 1 === (int) $rows[ $four[0] ]->reported );
+check( 'the others stay as they were', 'uncertain' === $rows[ $four[2] ]->status && 'uncertain' === $rows[ $four[3] ]->status );
+
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+$again = array_values(
+	array_filter(
+		mhc_heard( $exec_n, 'accepted' ),
+		static function ( $event ) use ( $jobs_n, $four ) {
+			return $event['job_id'] === $jobs_n[ $four[1] ];
+		}
+	)
+);
+check( 'it is handed to the transport once more, and no other is', 1 === count( $GLOBALS['mhc_handed'] ) && $emails_n[ $four[1] ] === $GLOBALS['mhc_handed'][0]['to'] && 2 === $GLOBALS['mhc_attempts'][ $emails_n[ $four[1] ] ] && 1 === $GLOBALS['mhc_attempts'][ $emails_n[ $four[2] ] ] && 1 === $GLOBALS['mhc_attempts'][ $emails_n[ $four[0] ] ], wp_json_encode( $GLOBALS['mhc_attempts'] ) );
+check( 'and the centre hears it was taken, at the second try', 1 === count( $again ) && 2 === $again[0]['attempt'] && 'completed' === mhc_row( $exec_n )->state, wp_json_encode( $again ) );
+
+$GLOBALS['mhc_handed'] = array();
+$answer                = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_n,
+		'resolution'   => 'mark_sent',
+		'job_ids'      => array( $jobs_n[ $four[2] ] ),
+	)
+);
+$rows = mhc_queue( $post_n );
+check( 'counted as sent at the centre: this site’s record says so, and nothing is sent', mhc_is( $answer, 'applied', array( 'changed' => 1 ) ) && 'sent' === $rows[ $four[2] ]->status && 2 === (int) $rows[ $four[2] ]->reported && null !== $rows[ $four[2] ]->sent_at && false !== strpos( (string) $rows[ $four[2] ]->error, 'judgement' ) && 0 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $rows[ $four[2] ] ) );
+
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_n,
+		'resolution'   => 'abandon',
+		'job_ids'      => array( $jobs_n[ $four[3] ] ),
+	)
+);
+$rows = mhc_queue( $post_n );
+mhc_send();
+check( 'given up at the centre: failed here, and nothing is sent', mhc_is( $answer, 'applied', array( 'changed' => 1 ) ) && 'failed' === $rows[ $four[3] ]->status && 2 === (int) $rows[ $four[3] ]->reported && 0 === count( $GLOBALS['mhc_handed'] ) );
+
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_n,
+		'resolution'   => 'abandon',
+		'job_ids'      => array( $jobs_n[ $four[3] ] ),
+	)
+);
+check( 'decided twice, the second changes nothing', mhc_is( $answer, 'applied', array( 'noop' => true ) ) && 'failed' === mhc_queue( $post_n )[ $four[3] ]->status );
+
+// One whose run died while handing it over: sent again, it is the second try.
+$two                            = mhc_people( 2 );
+list( $payload, $row, $post_v ) = mhc_prepared( $two );
+$exec_v                         = $payload['execution_id'];
+$jobs_v                         = MHC_Centre::$executions[ $exec_v ]['list'];
+$dead                           = Mailhouse_Queue::claim( 1 );
+// phpcs:ignore WordPress.DB
+$wpdb->update(
+	$queue_table,
+	array(
+		'attempt_started_at' => mailhouse_now(),
+		'claimed_at'         => gmdate( 'Y-m-d H:i:s', time() - Mailhouse_Queue::STALE_AFTER - 60 ),
+	),
+	array( 'id' => (int) $dead[0]->id )
+);
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+$unclear = mhc_heard( $exec_v, 'uncertain' );
+check( 'a message whose run died while handing it over is told to the centre as unclear, at the first try', 1 === count( $unclear ) && 1 === $unclear[0]['attempt'] && 'sent:1 uncertain:1' === mhc_tally( $post_v ), wp_json_encode( $unclear ) );
+mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_v,
+		'resolution'   => 'resend',
+		'job_ids'      => array( $unclear[0]['job_id'] ),
+	)
+);
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+$retried = array_values(
+	array_filter(
+		mhc_heard( $exec_v, 'accepted' ),
+		static function ( $event ) use ( $unclear ) {
+			return $event['job_id'] === $unclear[0]['job_id'];
+		}
+	)
+);
+check( 'sent again, it is told as taken at the second try', 1 === count( $retried ) && 2 === $retried[0]['attempt'] && 'sent:2' === mhc_tally( $post_v ) && in_array( $unclear[0]['job_id'], $jobs_v, true ), wp_json_encode( $retried ) );
+
+// Only its own messages.
+$two                            = mhc_people( 2 );
+list( $payload, $row, $post_j ) = mhc_prepared( $two );
+$exec_j                         = $payload['execution_id'];
+$jobs_j                         = MHC_Centre::$executions[ $exec_j ]['list'];
+$GLOBALS['mhc_transport']       = static function () {
+	return 'unclear';
+};
+mhc_send();
+$GLOBALS['mhc_transport'] = null;
+$answer                   = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_n,
+		'resolution'   => 'resend',
+		'job_ids'      => array( $jobs_j[ $two[0] ] ),
+	)
+);
+check( 'a decision about one campaign does not reach a message of another', mhc_is( $answer, 'applied', array( 'noop' => true ) ) && 'uncertain:2' === mhc_tally( $post_j ), wp_json_encode( $answer ) );
+
+// Not after the deadline, and not once it is called off.
+mhc_set( $exec_j, array( 'deadline_at' => gmdate( 'Y-m-d H:i:s', time() - 60 ) ) );
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_j,
+		'resolution'   => 'resend',
+		'job_ids'      => array_values( $jobs_j ),
+	)
+);
+$GLOBALS['mhc_handed'] = array();
+mhc_send();
+check( 'after the deadline nothing is sent again, even on the centre’s word', mhc_is( $answer, 'rejected', array( 'reason' => 'too_late' ) ) && 'uncertain:2' === mhc_tally( $post_j ) && 0 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $answer ) );
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_c,
+		'resolution'   => 'resend',
+		'job_ids'      => array_values( MHC_Centre::$executions[ $exec_c ]['list'] ),
+	)
+);
+check( 'nor of a campaign that was called off', mhc_is( $answer, 'rejected', array( 'reason' => 'too_late' ) ) && 'cancelled:3 sent:2' === mhc_tally( $post_c ) );
+$answer = mhc_ask(
+	'campaign.resolve',
+	array(
+		'execution_id' => $exec_j,
+		'resolution'   => 'mark_sent',
+		'job_ids'      => array( $jobs_j[ $two[0] ] ),
+	)
+);
+check( 'though it can still be counted as sent', mhc_is( $answer, 'applied', array( 'changed' => 1 ) ) && 'sent:1 uncertain:1' === mhc_tally( $post_j ) );
+
+foreach (
+	array(
+		'no messages named' => array( 'execution_id' => $exec_j, 'resolution' => 'resend', 'job_ids' => array() ),
+		'a decision that is not one' => array( 'execution_id' => $exec_j, 'resolution' => 'send_twice', 'job_ids' => array( $jobs_j[ $two[1] ] ) ),
+		'something that is not a message' => array( 'execution_id' => $exec_j, 'resolution' => 'abandon', 'job_ids' => array( 'everything' ) ),
+	) as $what => $bad
+) {
+	$answer = mhc_ask( 'campaign.resolve', $bad );
+	check( "$what: refused", mhc_is( $answer, 'rejected', array( 'reason' => 'malformed' ) ) && 'sent:1 uncertain:1' === mhc_tally( $post_j ), wp_json_encode( $answer ) );
+}
+
+// ---------------------------------------------------------------------------
+echo "\nA test creates nothing\n";
+
+Mailhouse_Settings::set( array( 'fallback_mailer' => 'postmark' ) );
+Mailhouse_Settings::flush();
+
+$count = static function () use ( $wpdb, $queue_table, $remote_table ) {
+	return array(
+		// phpcs:ignore WordPress.DB
+		(int) $wpdb->get_var( "SELECT COUNT(*) FROM {$queue_table}" ),
+		// phpcs:ignore WordPress.DB
+		(int) $wpdb->get_var( "SELECT COUNT(*) FROM {$remote_table}" ),
+		// phpcs:ignore WordPress.DB
+		(int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = %s", Mailhouse_Emails::POST_TYPE ) ),
+		// phpcs:ignore WordPress.DB
+		(int) $wpdb->get_var( 'SELECT COALESCE(SUM(sent), 0) FROM ' . Mailhouse_Install::table( 'subscribers' ) ),
+		(int) Mailhouse_Central_Outbox::highest(),
+	);
+};
+
+$before                = $count();
+$GLOBALS['mhc_handed'] = array();
+$test                  = array(
+	'campaign_id' => wp_generate_uuid4(),
+	'subject'     => 'A try for {{first_name|you}}',
+	'preheader'   => 'Before it goes',
+	'body_html'   => '<h1>Hello {{first_name|there}}</h1><p>[mhc_code] and {{company|your company}}.</p><script>alert(1)</script>',
+	'fields'      => array( 'company' ),
+	'to'          => array( 'One@Try.Example.Test', 'two@try.example.test' ),
+);
+$answer                = mhc_ask( 'campaign.test', $test );
+$sent                  = $GLOBALS['mhc_handed'];
+
+check( 'a test is sent to each address named, and the centre is told how many', mhc_is( $answer, 'applied', array( 'sent' => 2, 'of' => 2 ) ) && 2 === count( $sent ) && array( 'one@try.example.test', 'two@try.example.test' ) === wp_list_pluck( $sent, 'to' ), wp_json_encode( $answer ) . wp_json_encode( wp_list_pluck( $sent, 'to' ) ) );
+check( 'marked as a test, with the tags filled in for nobody', $sent && '[Test] A try for you' === $sent[0]['subject'] && false !== strpos( $sent[0]['html'], 'Hello there' ) && false !== strpos( $sent[0]['html'], 'your company' ), $sent ? $sent[0]['subject'] : '' );
+check( 'in this site’s own template, cleaned, and never run as shortcodes', $sent && false !== strpos( $sent[0]['html'], '<html' ) && false !== strpos( $sent[0]['html'], '[mhc_code]' ) && false === strpos( $sent[0]['html'], 'SHORTCODE-RAN' ) && false === strpos( $sent[0]['html'], 'alert(1)' ) );
+check( 'by the campaign’s own route', $sent && 'sendgrid' === $sent[0]['via'] && isset( $sent[0]['headers']['X-MH-Test'] ), $sent ? wp_json_encode( $sent[0]['headers'] ) : '' );
+check( 'and nothing is created: no campaign, no record, no row, no statistic, no news for the centre', $before === $count(), wp_json_encode( $before ) . ' ' . wp_json_encode( $count() ) );
+
+// The transport refuses: said, and the backup is not used.
+$GLOBALS['mhc_handed']    = array();
+$GLOBALS['mhc_transport'] = static function ( $to, $via ) {
+	return 'postmark' === $via ? 'accept' : 'unreachable';
+};
+$answer                   = mhc_ask( 'campaign.test', $test );
+$GLOBALS['mhc_transport'] = null;
+check( 'a test the transport would not take is said to have failed, and the backup transport is not used', mhc_is( $answer, 'failed', array( 'reason' => 'transport' ) ) && 0 === count( array_filter( $GLOBALS['mhc_handed'], static function ( $m ) { return 'postmark' === $m['via']; } ) ), wp_json_encode( $answer ) ); // phpcs:ignore
+
+$GLOBALS['mhc_handed'] = array();
+
+foreach (
+	array(
+		'six addresses'            => array( 'to' => array( 'a@x.test', 'b@x.test', 'c@x.test', 'd@x.test', 'e@x.test', 'f@x.test' ) ),
+		'no address'               => array( 'to' => array() ),
+		'something not an address' => array( 'to' => array( 'not an address' ) ),
+		'a subject of two lines'   => array( 'subject' => "One\nBcc: everybody@x.test" ),
+		'no body'                  => array( 'body_html' => '' ),
+	) as $what => $change
+) {
+	$answer = mhc_ask( 'campaign.test', array_merge( $test, $change ) );
+	check( "$what: refused, and nothing is sent", mhc_is( $answer, 'rejected', array( 'reason' => 'malformed' ) ) && 0 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $answer ) );
+}
+
+$answer = mhc_ask( 'campaign.test', array_merge( $test, array( 'body_html' => '<script>alert(1)</script>' ) ) );
+check( 'a body with nothing left once cleaned: refused', mhc_is( $answer, 'rejected', array( 'reason' => 'unusable' ) ) && 0 === count( $GLOBALS['mhc_handed'] ) );
+
+Mailhouse_Settings::set( array( 'fallback_mailer' => '' ) );
+Mailhouse_Settings::flush();
 
 // ---------------------------------------------------------------------------
 echo "\nA copy of the site, and a site switched off\n";

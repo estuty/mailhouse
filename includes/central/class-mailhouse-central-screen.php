@@ -633,6 +633,14 @@ class Mailhouse_Central_Screen {
 			}
 		}
 
+		// What became of each message is owed to the centre until it has heard.
+		$owed = Mailhouse_Central_Campaigns::unreported();
+
+		if ( $owed ) {
+			/* translators: %s: a number of messages. */
+			$parts[] = sprintf( __( 'the centre has yet to be told what became of %s messages', 'mailhouse' ), number_format_i18n( $owed ) );
+		}
+
 		return implode( '; ', $parts );
 	}
 }

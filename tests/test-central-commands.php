@@ -597,7 +597,7 @@ $inbox   = Mailhouse_Install::table( 'inbox' );
 $columns = (array) $wpdb->get_col( "SHOW COLUMNS FROM {$inbox}" ); // phpcs:ignore WordPress.DB
 check( 'the inbox table exists, and holds no column a subscriber could be in', array( 'id', 'command_id', 'seq', 'type', 'status', 'result', 'received_at', 'acked' ) === $columns, implode( ',', $columns ) );
 check( 'a command id can be written down only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$inbox} WHERE Key_name = 'command_id' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
-check( 'the schema version is 1.5.0', '1.5.0' === Mailhouse_Install::DB_VERSION );
+check( 'the schema version is 1.6.0', '1.6.0' === Mailhouse_Install::DB_VERSION );
 
 $handler = (string) file_get_contents( dirname( __DIR__ ) . '/includes/central/class-mailhouse-central-commands.php' ); // phpcs:ignore
 check( 'nothing a command says chooses what is called: each kind is spelled out with its one function', false === strpos( $handler, 'call_user_func' ) && false === strpos( $handler, 'eval(' ) && 0 === preg_match( '/\$[a-z_]+\s*\(/', $handler ) && count( Mailhouse_Central_Commands::TYPES ) === preg_match_all( "/^\t\t\tcase '[a-z_.]+':\r?$/m", $handler ) );
