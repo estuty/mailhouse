@@ -279,8 +279,10 @@ plugin is installed.
   written, and this site, which does not take the centre's word for it,
   removes such an address when a newsletter arrives.
 - **What a provider says of one of the centre's messages is taken only
-  from the provider your newsletters leave by.** A call in another
-  provider's name says nothing about them.
+  from the provider your newsletters leave by**, where that is a provider
+  that calls back. A call in another provider's name says nothing about
+  them. Where they leave through a mail server, the server may be any
+  provider's relay, and whichever provider calls is believed, as before.
 
 ## Technical summary
 
@@ -314,7 +316,7 @@ mocks.
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
-| `tests/test-central-campaigns.php` — 339 assertions | pass |
+| `tests/test-central-campaigns.php` — 342 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

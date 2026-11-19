@@ -3129,6 +3129,19 @@ $rows = mhc_queue( $post_d );
 Mailhouse_Central_Campaigns::network();
 check( 'nor a bounce, nor a complaint; and the centre is told nothing of it', null === $rows[ $seven[6] ]->bounced_at && null === $rows[ $seven[6] ]->complained_at && $before === count( mhc_heard( $exec_d ) ), wp_json_encode( $rows[ $seven[6] ] ) );
 check( 'and the provider the newsletters leave by is not thereby one that has called', ! in_array( 'sendgrid', Mailhouse_Central_Delivery::callers(), true ) && false === Mailhouse_Central_Delivery::reports(), wp_json_encode( Mailhouse_Central_Delivery::callers() ) );
+check( 'who may speak: the provider the newsletters leave by, and nobody in particular never', true === Mailhouse_Central_Delivery::may_speak( 'sendgrid' ) && false === Mailhouse_Central_Delivery::may_speak( 'brevo' ) && false === Mailhouse_Central_Delivery::may_speak( 'postmark' ) && false === Mailhouse_Central_Delivery::may_speak( '' ) );
+
+// Newsletters that leave through a mail server: it may be any provider's
+// relay, and nothing here knows whose. That provider's calls are about
+// this site's messages, whichever provider it is.
+Mailhouse_Settings::set( array( 'campaign_mailer' => 'smtp' ) );
+Mailhouse_Settings::flush();
+check( 'through a mail server, whichever provider calls may be the one behind it', true === Mailhouse_Central_Delivery::may_speak( 'brevo' ) && true === Mailhouse_Central_Delivery::may_speak( 'postmark' ) && true === Mailhouse_Central_Delivery::may_speak( 'sendgrid' ) && false === Mailhouse_Central_Delivery::may_speak( '' ) );
+$as_brevo( 'delivered', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$rows = mhc_queue( $post_d );
+check( 'and what it says of a message is written beside it', null !== $rows[ $seven[6] ]->delivered_at, wp_json_encode( $rows[ $seven[6] ] ) );
+Mailhouse_Settings::set( array( 'campaign_mailer' => '' ) );
+Mailhouse_Settings::flush();
 Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => '' ) );
 Mailhouse_Settings::flush();
 delete_option( Mailhouse_Central_Delivery::HEARD_OPTION );

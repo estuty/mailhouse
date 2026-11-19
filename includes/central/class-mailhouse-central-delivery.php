@@ -181,6 +181,34 @@ class Mailhouse_Central_Delivery {
 		return in_array( self::transport(), self::callers(), true );
 	}
 
+	/**
+	 * Whether a provider's call can say what became of one of the centre's
+	 * messages.
+	 *
+	 * Where the newsletters leave through a provider that calls back, only
+	 * that provider can. The door a provider calls at takes any provider's
+	 * name, and some of them sign nothing: a call made in another's name,
+	 * to avoid the signature this site's own provider's calls must carry,
+	 * says nothing about a message of the centre's.
+	 *
+	 * Where they leave through a mail server (or PHP's own mail), the
+	 * server may be any provider's relay, and nothing here knows whose. Then
+	 * whichever provider calls is believed, as before.
+	 *
+	 * @param string $provider The provider whose call this is.
+	 * @return bool
+	 */
+	public static function may_speak( $provider ) {
+		$provider  = (string) $provider;
+		$transport = self::transport();
+
+		if ( '' === $provider ) {
+			return false;
+		}
+
+		return ! array_key_exists( $transport, Mailhouse_Webhooks::providers() ) || $provider === $transport;
+	}
+
 	// ---- writing down what was said of a message -------------------------------------------
 
 	/**
@@ -208,12 +236,7 @@ class Mailhouse_Central_Delivery {
 			return false;
 		}
 
-		// Only the provider the newsletters leave by can say what became of
-		// one. The door a provider calls at takes any provider's name, and
-		// some of them sign nothing: a call made in another's name, to
-		// avoid the signature this site's own provider's calls must carry,
-		// says nothing about a message of the centre's.
-		if ( '' === self::$speaking || self::$speaking !== self::transport() ) {
+		if ( ! self::may_speak( self::$speaking ) ) {
 			return false;
 		}
 
