@@ -262,10 +262,25 @@ plugin is installed.
 - **A test.** The centre can ask this site to send a draft to up to five
   addresses its operator names, so that they see it as your subscribers
   would: in your template, through your transport. Nothing is created
-  here by a test, and none of your subscribers is written to.
+  here by a test, and none of your subscribers is written to. This site
+  counts them itself: sixty addresses an hour and no more, whatever the
+  centre asks.
 - A copy of this site at another address (a staging copy, say) sends none
   of it. Disconnecting from the centre calls off whatever of the centre's
-  has not been sent.
+  has not been sent. If the centre cuts this site off (an operator there
+  revokes its key), this site holds what it has of the centre's and sends
+  none of it, and carries on if it is connected again before the
+  newsletter's deadline.
+- **Your readers' own links are carried nowhere.** A newsletter from the
+  centre may use `{{unsubscribe_url}}` or `{{preferences_url}}` as a
+  link's own address. It may not put one inside another address, or in a
+  picture's: that would hand each reader's key to whoever ran the server
+  at the other end. The centre refuses such a newsletter when it is
+  written, and this site, which does not take the centre's word for it,
+  removes such an address when a newsletter arrives.
+- **What a provider says of one of the centre's messages is taken only
+  from the provider your newsletters leave by.** A call in another
+  provider's name says nothing about them.
 
 ## Technical summary
 
@@ -299,7 +314,7 @@ mocks.
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
-| `tests/test-central-campaigns.php` — 319 assertions | pass |
+| `tests/test-central-campaigns.php` — 339 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

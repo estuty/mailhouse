@@ -137,6 +137,16 @@ class Mailhouse_Central_Campaigns {
 	const TEST_ADDRESSES = 5;
 
 	/**
+	 * How many addresses, in all, this site will send tests to in an hour.
+	 */
+	const TEST_ADDRESSES_AN_HOUR = 60;
+
+	/**
+	 * Where that hour's count is kept.
+	 */
+	const TESTS_OPTION = 'mailhouse_central_tests';
+
+	/**
 	 * The states in which there is still something to do.
 	 *
 	 * @var string[]
@@ -521,6 +531,16 @@ class Mailhouse_Central_Campaigns {
 		$clean = wp_kses( (string) $html, $allowed, $protocols );
 		remove_filter( 'safe_style_css', $styles, 99 );
 
+		// A link may be this reader's own link. No address may carry it
+		// somewhere else: see carries_a_key().
+		$clean = (string) preg_replace_callback(
+			'/\s(href|src)=("|\')(.*?)\2/is',
+			static function ( $found ) {
+				return self::carries_a_key( $found[1], html_entity_decode( $found[3], ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ) ? '' : $found[0];
+			},
+			$clean
+		);
+
 		// One class, on a link: this site's own button. Any other goes.
 		$clean = (string) preg_replace_callback(
 			'/\sclass=("|\')(.*?)\1/i',
@@ -538,6 +558,50 @@ class Mailhouse_Central_Campaigns {
 	 *
 	 * @return string[]
 	 */
+	/**
+	 * Whether an address would carry a reader's own key somewhere else.
+	 *
+	 * `{{unsubscribe_url}}` and `{{preferences_url}}` are filled in, for each
+	 * reader, with a link that holds their key: whoever has it can take
+	 * them off the list and change what this site keeps of them. A link's
+	 * address may *be* one of them, from its first character, so that it
+	 * leads here and nowhere else. It may not have one inside it, and a
+	 * picture's address may not have one at all: a picture at
+	 * `https://elsewhere.example/p.gif?u={{preferences_url}}` would hand
+	 * every reader's key to whoever runs that server, as each of them
+	 * opened the message.
+	 *
+	 * The centre refuses such a body when it is written. This is the
+	 * second look, by this site, which does not depend on the first.
+	 *
+	 * @param string $attribute `href` or `src`.
+	 * @param string $value     The address, as written.
+	 * @return bool
+	 */
+	public static function carries_a_key( $attribute, $value ) {
+		$value = trim( (string) $value );
+		$found = array();
+		// The plugin's own pattern for a merge tag, to the letter.
+		$count = preg_match_all( '/(?:\{\{|\[\[)\s*([a-z0-9_]+)\s*(?:\|[^}\]]*)?\s*(?:\}\}|\]\])/i', $value, $found, PREG_OFFSET_CAPTURE );
+
+		if ( false === $count ) {
+			// Too long or too strange to read: not kept.
+			return true;
+		}
+
+		for ( $i = 0; $i < $count; $i++ ) {
+			if ( ! in_array( strtolower( $found[1][ $i ][0] ), array( 'unsubscribe_url', 'preferences_url', 'confirmation_url', 'confirm_button' ), true ) ) {
+				continue;
+			}
+
+			if ( 'href' !== strtolower( (string) $attribute ) || 0 !== $found[0][ $i ][1] ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	public static function style_properties() {
 		$sides = array( '', '-top', '-right', '-bottom', '-left' );
 		$list  = array( 'color', 'background-color', 'font-size', 'font-weight', 'font-style', 'font-family', 'text-align', 'text-decoration', 'text-transform', 'line-height', 'letter-spacing', 'width', 'max-width', 'min-width', 'height', 'max-height', 'display', 'vertical-align', 'white-space', 'word-break', 'list-style-type', 'text-indent', 'border-collapse', 'border-spacing', 'border-radius', 'border-color', 'border-width', 'border-style' );
@@ -604,15 +668,25 @@ class Mailhouse_Central_Campaigns {
 	 * Whether this site may send for the centre at this moment.
 	 *
 	 * Not when the connector is switched off; not when the centre has said
-	 * this website is gone; and not when this is a copy of the site living
-	 * at another address, which holds a copy of the campaign and of every
-	 * subscriber and must not write to any of them.
+	 * this website is gone, or has stopped answering this site's key; and
+	 * not when this is a copy of the site living at another address, which
+	 * holds a copy of the campaign and of every subscriber and must not
+	 * write to any of them.
+	 *
+	 * A site the centre has cut off (its key revoked: "suspended") holds
+	 * what it has of the centre's and sends none of it. An operator who
+	 * disconnects a website at the centre means its campaigns to stop, and
+	 * a site that cannot be told to hold or to call off should not be
+	 * sending. It carries on if it is connected again before the
+	 * campaign's deadline. (Until 1.10 a suspended site went on sending.)
+	 * A centre that merely cannot be reached is another matter: the site
+	 * is still connected, and goes on.
 	 *
 	 * @return bool
 	 */
 	public static function may_send() {
 		return ! Mailhouse_Central::disabled()
-			&& in_array( Mailhouse_Central_Identity::status(), array( 'connected', 'suspended' ), true )
+			&& 'connected' === Mailhouse_Central_Identity::status()
 			&& Mailhouse_Central_Identity::at_registered_address();
 	}
 
@@ -1424,6 +1498,43 @@ class Mailhouse_Central_Campaigns {
 	}
 
 	/**
+	 * Whether this site will send that many more test messages this hour,
+	 * counting them if it will.
+	 *
+	 * A test goes to addresses the centre names, who are nobody's
+	 * subscribers, at once and outside the queue. The centre allows ten to
+	 * a campaign in ten minutes; but that is the centre's rule, and
+	 * whoever held the centre's key would not be bound by it. Sixty
+	 * addresses an hour is more than anybody trying a newsletter out
+	 * needs, and too few to be worth anybody's while.
+	 *
+	 * @param int $addresses How many this test is for.
+	 * @return bool
+	 */
+	public static function test_allowance( $addresses ) {
+		$now  = time();
+		$used = get_option( self::TESTS_OPTION, array() );
+		$used = is_array( $used ) && isset( $used['from'], $used['sent'] ) && $now - (int) $used['from'] < HOUR_IN_SECONDS && (int) $used['from'] <= $now
+			? array(
+				'from' => (int) $used['from'],
+				'sent' => max( 0, (int) $used['sent'] ),
+			)
+			: array(
+				'from' => $now,
+				'sent' => 0,
+			);
+
+		if ( $used['sent'] + max( 1, (int) $addresses ) > self::TEST_ADDRESSES_AN_HOUR ) {
+			return false;
+		}
+
+		$used['sent'] += max( 1, (int) $addresses );
+		update_option( self::TESTS_OPTION, $used, false );
+
+		return true;
+	}
+
+	/**
 	 * Carry out `campaign.test`: send a draft, now, to a few addresses an
 	 * operator named, in this site's template and through its transport.
 	 *
@@ -1461,6 +1572,12 @@ class Mailhouse_Central_Campaigns {
 			|| preg_match( '/[\x00-\x1f\x7f]/', $subject ) || preg_match( '/[\x00-\x1f\x7f]/', $preheader )
 		) {
 			return array( 'rejected', array( 'reason' => 'malformed' ) );
+		}
+
+		// So many an hour, by this site's own count. The centre has a
+		// limit too; this one does not depend on it.
+		if ( ! self::test_allowance( count( $to ) ) ) {
+			return array( 'rejected', array( 'reason' => 'too_many' ) );
 		}
 
 		// Cleaned here, as the real thing is.

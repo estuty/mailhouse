@@ -2641,6 +2641,69 @@ foreach (
 $answer = mhc_ask( 'campaign.test', array_merge( $test, array( 'body_html' => '<script>alert(1)</script>' ) ) );
 check( 'a body with nothing left once cleaned: refused', mhc_is( $answer, 'rejected', array( 'reason' => 'unusable' ) ) && 0 === count( $GLOBALS['mhc_handed'] ) );
 
+// So many an hour, by this site's own count: whoever held the centre's key
+// would not be bound by the centre's limit.
+$GLOBALS['mhc_handed'] = array();
+update_option(
+	Mailhouse_Central_Campaigns::TESTS_OPTION,
+	array(
+		'from' => time() - 60,
+		'sent' => Mailhouse_Central_Campaigns::TEST_ADDRESSES_AN_HOUR - 2,
+	),
+	false
+);
+$answer = mhc_ask( 'campaign.test', $test );
+check( 'tests are counted by this site itself: the sixtieth address of an hour is still written to', mhc_is( $answer, 'applied', array( 'sent' => 2, 'of' => 2 ) ) && 2 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $answer ) );
+$answer = mhc_ask( 'campaign.test', array_merge( $test, array( 'to' => array( 'three@try.example.test' ) ) ) );
+check( 'and the sixty-first is not: refused, saying why, and nothing is sent', mhc_is( $answer, 'rejected', array( 'reason' => 'too_many' ) ) && 2 === count( $GLOBALS['mhc_handed'] ), wp_json_encode( $answer ) );
+$kept = get_option( Mailhouse_Central_Campaigns::TESTS_OPTION );
+check( 'what was refused is not counted, so a small one is not kept out by a large one', Mailhouse_Central_Campaigns::TEST_ADDRESSES_AN_HOUR === (int) $kept['sent'], wp_json_encode( $kept ) );
+update_option(
+	Mailhouse_Central_Campaigns::TESTS_OPTION,
+	array(
+		'from' => time() - HOUR_IN_SECONDS - 1,
+		'sent' => Mailhouse_Central_Campaigns::TEST_ADDRESSES_AN_HOUR,
+	),
+	false
+);
+$answer = mhc_ask( 'campaign.test', $test );
+check( 'an hour later it is a new count', mhc_is( $answer, 'applied', array( 'sent' => 2, 'of' => 2 ) ) && 4 === count( $GLOBALS['mhc_handed'] ) && 2 === (int) get_option( Mailhouse_Central_Campaigns::TESTS_OPTION )['sent'], wp_json_encode( $answer ) );
+update_option(
+	Mailhouse_Central_Campaigns::TESTS_OPTION,
+	array(
+		'from' => time() + DAY_IN_SECONDS,
+		'sent' => Mailhouse_Central_Campaigns::TEST_ADDRESSES_AN_HOUR,
+	),
+	false
+);
+check( 'and a count that claims to have begun tomorrow is not believed', true === Mailhouse_Central_Campaigns::test_allowance( 1 ) );
+delete_option( Mailhouse_Central_Campaigns::TESTS_OPTION );
+
+// ---------------------------------------------------------------------------
+echo "\nA reader’s own link is carried nowhere\n";
+
+$clean = static function ( $html ) {
+	return Mailhouse_Central_Campaigns::sanitise( $html );
+};
+$gone  = static function ( $html ) use ( $clean ) {
+	$kept = $clean( $html );
+
+	return false === stripos( $kept, 'collector' ) && false === stripos( $kept, '_url' ) && false === stripos( $kept, 'confirm_button' ) && false !== strpos( $kept, 'Read' );
+};
+
+check( 'not in a picture’s address, to be fetched when the message is opened', $gone( '<p>Read<img src="https://collector.example/p.gif?u={{preferences_url}}" alt=""></p>' ), $clean( '<p>Read<img src="https://collector.example/p.gif?u={{preferences_url}}" alt=""></p>' ) );
+check( 'not as a picture’s whole address either', $gone( '<p>Read<img src="{{unsubscribe_url}}" alt=""></p>' ), $clean( '<p>Read<img src="{{unsubscribe_url}}" alt=""></p>' ) );
+check( 'not inside a link to somewhere else', $gone( '<p><a href="https://collector.example/?u={{unsubscribe_url}}">Read more</a></p>' ), $clean( '<p><a href="https://collector.example/?u={{unsubscribe_url}}">Read more</a></p>' ) );
+check( 'in either kind of bracket, with a fallback, however it is spaced or capitalised', $gone( '<p><a href="https://collector.example/?u=[[preferences_url|x]]">Read</a> <a href="https://collector.example/?u={{  Unsubscribe_URL  }}">more</a></p>' ) );
+check( 'nor a second one after the first, nor the link that confirms a sign-up', $gone( '<p><a href="{{unsubscribe_url}}&amp;next={{preferences_url}}">Read</a> <a href="https://collector.example/?c={{confirmation_url}}">a</a> <a href="https://collector.example/?c={{confirm_button}}">b</a></p>' ) );
+check( 'the link is taken off and its words are left', '<p><a>Read more</a></p>' === $clean( '<p><a href="https://collector.example/?u={{unsubscribe_url}}">Read more</a></p>' ), $clean( '<p><a href="https://collector.example/?u={{unsubscribe_url}}">Read more</a></p>' ) );
+
+$own = '<p><a href="{{unsubscribe_url}}">Leave</a> <a href="{{preferences_url}}?from=mail">Preferences</a> or copy this: {{preferences_url}}</p>';
+check( 'a link may be the reader’s own link, from its first character, and it may be shown in the text', $own === $clean( $own ), $clean( $own ) );
+$made = '<p><a href="https://example.org/survey?e={{email}}&amp;n={{first_name|friend}}">Tell us</a><img src="https://example.org/banner.png?for={{first_name}}" alt="" /></p>';
+check( 'and what is not a key travels as before: an address may still be made for its reader', false !== strpos( $clean( $made ), 'survey?e={{email}}' ) && false !== strpos( $clean( $made ), 'banner.png?for={{first_name}}' ), $clean( $made ) );
+check( 'an ordinary address carries none', false === Mailhouse_Central_Campaigns::carries_a_key( 'href', 'https://example.org/?x=1' ) && false === Mailhouse_Central_Campaigns::carries_a_key( 'src', 'https://example.org/a.png' ) && false === Mailhouse_Central_Campaigns::carries_a_key( 'HREF', '{{unsubscribe_url}}' ) && true === Mailhouse_Central_Campaigns::carries_a_key( 'src', '{{unsubscribe_url}}' ) && true === Mailhouse_Central_Campaigns::carries_a_key( 'href', ' x{{unsubscribe_url}}' ) );
+
 Mailhouse_Settings::set( array( 'fallback_mailer' => '' ) );
 Mailhouse_Settings::flush();
 
@@ -3037,6 +3100,39 @@ check( 'a call whose signature is wrong is not the provider calling, and writes 
 Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => '' ) );
 Mailhouse_Settings::flush();
 
+// A call made in another provider's name. The door takes any provider's
+// name, and Brevo's calls are signed by nothing: so that is how somebody who
+// had this site's address for calls would get round SendGrid's signature.
+Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE' ) );
+Mailhouse_Settings::flush();
+$as_brevo = static function ( $kind, $email, $message_id ) {
+	return Mailhouse_Webhooks::process(
+		'brevo',
+		(string) wp_json_encode(
+			array(
+				'event'      => $kind,
+				'email'      => $email,
+				'message-id' => $message_id,
+				'id'         => 4242,
+				'ts_event'   => time() - 30,
+			)
+		)
+	);
+};
+$before   = count( mhc_heard( $exec_d ) );
+$result   = $as_brevo( 'delivered', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$rows     = mhc_queue( $post_d );
+check( 'what is said of a message in another provider’s name is not written beside it', ! is_wp_error( $result ) && null === $rows[ $seven[6] ]->delivered_at, wp_json_encode( $result ) );
+$as_brevo( 'hard_bounce', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$as_brevo( 'spam', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$rows = mhc_queue( $post_d );
+Mailhouse_Central_Campaigns::network();
+check( 'nor a bounce, nor a complaint; and the centre is told nothing of it', null === $rows[ $seven[6] ]->bounced_at && null === $rows[ $seven[6] ]->complained_at && $before === count( mhc_heard( $exec_d ) ), wp_json_encode( $rows[ $seven[6] ] ) );
+check( 'and the provider the newsletters leave by is not thereby one that has called', ! in_array( 'sendgrid', Mailhouse_Central_Delivery::callers(), true ) && false === Mailhouse_Central_Delivery::reports(), wp_json_encode( Mailhouse_Central_Delivery::callers() ) );
+Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => '' ) );
+Mailhouse_Settings::flush();
+delete_option( Mailhouse_Central_Delivery::HEARD_OPTION );
+
 check( 'in a sentence, for this site’s administrator: nothing heard', false !== strpos( Mailhouse_Central_Delivery::summary(), 'nothing heard from SendGrid' ), Mailhouse_Central_Delivery::summary() );
 mhc_provider_says( 'delivered', $first, 'sg-nobody-holds-this' );
 check( 'and once it has called', false !== strpos( Mailhouse_Central_Delivery::summary(), 'SendGrid last called' ), Mailhouse_Central_Delivery::summary() );
@@ -3080,6 +3176,48 @@ $wpdb->update( $queue_table, array( 'status' => 'waiting' ), array( 'campaign_id
 Mailhouse_Central_Campaigns::local();
 mhc_send();
 check( 'the real site, at its own address, sends it', 'sent:5' === mhc_tally( $post_k ) && 5 === count( $GLOBALS['mhc_handed'] ), mhc_tally( $post_k ) . ' ' . Mailhouse_Central_Identity::status() );
+
+// ---------------------------------------------------------------------------
+echo "\nA site the centre has cut off\n";
+
+$five                           = mhc_people( 5 );
+list( $payload, $row, $post_s ) = mhc_prepared( $five, array( 'start' => time() + HOUR_IN_SECONDS ) );
+mhc_set( $payload['execution_id'], array( 'start_at' => gmdate( 'Y-m-d H:i:s', time() - 5 ) ) );
+
+// Its key was revoked at the centre: an operator disconnected the website,
+// and means its campaigns to stop.
+Mailhouse_Central_Identity::update(
+	array(
+		'status'           => 'suspended',
+		'suspended_reason' => 'key_revoked',
+	)
+);
+Mailhouse_Central_Identity::flush();
+
+$GLOBALS['mhc_handed'] = array();
+Mailhouse_Central_Campaigns::local();
+mhc_send();
+check( 'a site whose key the centre has revoked starts nothing of the centre’s', false === Mailhouse_Central_Campaigns::may_send() && 'ready' === mhc_row( $payload['execution_id'] )->state && 'waiting:5' === mhc_tally( $post_s ) && 0 === count( $GLOBALS['mhc_handed'] ), mhc_tally( $post_s ) );
+
+// One that was already being sent when it was cut off.
+// phpcs:ignore WordPress.DB
+$wpdb->update( $queue_table, array( 'status' => 'pending', 'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() - 5 ) ), array( 'campaign_id' => $post_s ) );
+mhc_send();
+check( 'and sends nothing of one already begun: the rows wait', 0 === count( $GLOBALS['mhc_handed'] ) && 'pending:5' === mhc_tally( $post_s ), mhc_tally( $post_s ) );
+
+Mailhouse_Central_Identity::update(
+	array(
+		'status'           => 'connected',
+		'suspended_reason' => '',
+	)
+);
+Mailhouse_Central_Identity::flush();
+mhc_make_due( $post_s );
+// phpcs:ignore WordPress.DB
+$wpdb->update( $queue_table, array( 'status' => 'waiting' ), array( 'campaign_id' => $post_s ) );
+Mailhouse_Central_Campaigns::local();
+mhc_send();
+check( 'connected again before the deadline, it sends what it held', true === Mailhouse_Central_Campaigns::may_send() && 'sent:5' === mhc_tally( $post_s ) && 5 === count( $GLOBALS['mhc_handed'] ), mhc_tally( $post_s ) . ' ' . Mailhouse_Central_Identity::status() );
 
 // ---------------------------------------------------------------------------
 echo "\nDisconnecting\n";

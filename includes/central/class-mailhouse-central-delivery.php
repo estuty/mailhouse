@@ -101,6 +101,13 @@ class Mailhouse_Central_Delivery {
 	}
 
 	/**
+	 * The provider whose call is being read at this moment, or nothing.
+	 *
+	 * @var string
+	 */
+	private static $speaking = '';
+
+	/**
 	 * Note that a provider has called with something that could be read.
 	 *
 	 * @param string $provider Provider id.
@@ -110,8 +117,12 @@ class Mailhouse_Central_Delivery {
 		$provider = sanitize_key( (string) $provider );
 
 		if ( ! array_key_exists( $provider, Mailhouse_Webhooks::providers() ) ) {
+			self::$speaking = '';
 			return;
 		}
+
+		// Whose call this is, for what it goes on to say of a message.
+		self::$speaking = $provider;
 
 		$heard = self::heard_from();
 		$now   = time();
@@ -194,6 +205,15 @@ class Mailhouse_Central_Delivery {
 		$type = (string) $event['type'];
 
 		if ( ! in_array( $type, array( 'delivered', 'hard', 'soft', 'complaint' ), true ) ) {
+			return false;
+		}
+
+		// Only the provider the newsletters leave by can say what became of
+		// one. The door a provider calls at takes any provider's name, and
+		// some of them sign nothing: a call made in another's name, to
+		// avoid the signature this site's own provider's calls must carry,
+		// says nothing about a message of the centre's.
+		if ( '' === self::$speaking || self::$speaking !== self::transport() ) {
 			return false;
 		}
 
