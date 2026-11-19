@@ -148,7 +148,7 @@ Mailhouse_Settings::set(
 
 echo "== Schema ==\n";
 
-check( 'schema version is 1.6.0', '1.6.0' === Mailhouse_Install::DB_VERSION && '1.6.0' === get_option( 'mailhouse_db_version' ), (string) get_option( 'mailhouse_db_version' ) );
+check( 'schema version is 1.7.0', '1.7.0' === Mailhouse_Install::DB_VERSION && '1.7.0' === get_option( 'mailhouse_db_version' ), (string) get_option( 'mailhouse_db_version' ) );
 check( 'subscribers have a revision', mhf_has_column( 'subscribers', 'revision' ) );
 
 foreach ( array( 'claim_token', 'claimed_at', 'provider_message_id', 'remote_job_id', 'reported' ) as $column ) {
@@ -178,7 +178,7 @@ check( 'a second request stands back while one is upgrading', ! mhf_has_column( 
 update_option( 'mailhouse_install_lock', time() - 600, false );
 Mailhouse_Install::maybe_install();
 check( 'a stale lock does not block the upgrade for ever', mhf_has_column( 'subscribers', 'revision' ) );
-check( 'the version is recorded', '1.6.0' === get_option( 'mailhouse_db_version' ) );
+check( 'the version is recorded', '1.7.0' === get_option( 'mailhouse_db_version' ) );
 check( 'the lock is released', false === get_option( 'mailhouse_install_lock' ) );
 
 echo "\n== Changes to a subscriber are observable ==\n";
@@ -865,7 +865,7 @@ echo "\n== Uninstall leaves nothing behind ==\n";
 
 $uninstall = (string) file_get_contents( MAILHOUSE_PATH . 'uninstall.php' ); // phpcs:ignore
 
-foreach ( array( 'mailhouse_webhook_key', 'mailhouse_new_post_seeded', 'mailhouse_install_lock' ) as $option ) {
+foreach ( array( 'mailhouse_webhook_key', 'mailhouse_new_post_seeded', 'mailhouse_install_lock', 'mailhouse_central_heard' ) as $option ) {
 	check( "uninstall removes $option", false !== strpos( $uninstall, "'" . $option . "'" ) );
 }
 

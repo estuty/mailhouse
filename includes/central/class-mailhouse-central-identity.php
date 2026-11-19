@@ -81,6 +81,9 @@ class Mailhouse_Central_Identity {
 			'last_heartbeat_at' => 0,
 			// What the centre said this site's standing is: connected or paused.
 			'centre_status'     => '',
+			// What the centre says it can be told, beyond what every centre
+			// can: names, as it gave them with its last answer to a report.
+			'centre_accepts'    => array(),
 			'suspended_reason'  => '',
 			'last_error'        => '',
 			'failures'          => 0,

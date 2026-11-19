@@ -22,6 +22,8 @@ class Mailhouse_Central_Status {
 	 * `sync.v1`: this site's changes are sent to the centre. `reconcile.v1`:
 	 * the two copies can be compared. `subscribers.commands.v1`: this site
 	 * carries out what the centre asks of its subscribers and tags.
+	 * `delivery.events.v1`: where this site's provider says what became of
+	 * a message afterwards, this site can say which message.
 	 *
 	 * @return string[]
 	 */
@@ -40,6 +42,9 @@ class Mailhouse_Central_Status {
 			// A campaign is handed over as a command, so it is taken in
 			// only by a site that takes commands.
 			$capabilities[] = Mailhouse_Central_Campaigns::CAPABILITY;
+			// And only a site that sends for the centre has anything to
+			// say about what became of a message.
+			$capabilities[] = Mailhouse_Central_Delivery::CAPABILITY;
 		}
 
 		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', $capabilities ), 'is_string' ) );
@@ -76,6 +81,9 @@ class Mailhouse_Central_Status {
 				'site'     => $site_mailer,
 				'campaign' => '' !== $campaign_mailer ? $campaign_mailer : $site_mailer,
 				'ready'    => $provider ? (bool) $provider->is_configured() : false,
+				// The providers that have called this site lately to say
+				// what became of a message. Names, and nothing else.
+				'callbacks' => Mailhouse_Central_Delivery::callers(),
 			),
 			'tracking'       => array(
 				'opens'  => (bool) mailhouse_option( 'track_opens', false ),

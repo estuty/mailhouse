@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.6.0';
+	const DB_VERSION = '1.7.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -178,13 +178,19 @@ class Mailhouse_Install {
 				reported tinyint(3) unsigned NOT NULL DEFAULT 0,
 				attempt_started_at datetime DEFAULT NULL,
 				error_class varchar(10) DEFAULT NULL,
+				delivered_at datetime DEFAULT NULL,
+				bounced_at datetime DEFAULT NULL,
+				bounce_class varchar(4) DEFAULT NULL,
+				bounce_reason varchar(300) DEFAULT NULL,
+				complained_at datetime DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY campaign_subscriber (campaign_id,subscriber_id),
 				UNIQUE KEY remote_job (remote_job_id),
 				KEY status_scheduled (status,scheduled_at),
 				KEY campaign_status (campaign_id,status),
 				KEY claim (claim_token),
-				KEY report (reported,id)
+				KEY report (reported,id),
+				KEY provider_message (provider_message_id)
 			) {$collate};"
 		);
 

@@ -237,6 +237,19 @@ plugin is installed.
   called off; and, if this site records opens and clicks, each reader's
   first. It is told by the centre's own number for the message. No address
   is sent, and any address in what a transport said is taken out first.
+- **And what your provider says afterwards, where it says anything.** If
+  your newsletters leave through a provider that calls this site back
+  (SendGrid, Mailgun, Brevo, Postmark or Resend, with this site's address
+  from **Settings → Bounces and complaints** given to it), each report is
+  matched to the message it is about, by the name the provider gave that
+  message when it took it, and the centre is told: delivered, bounced (and
+  whether for good), or marked as spam. What this site does with a report
+  is unchanged: a bounce still retires the address and a complaint still
+  unsubscribes, connected or not. Only messages of the centre's
+  newsletters are written to; your own campaigns' are left as they were.
+  Through SMTP or PHP mail there is nothing to hear, and the centre shows
+  "not available" for delivery and not a nought. **Settings → Central**
+  says which of the two this site is.
 - **The centre can hold it, let it go and call it off too.** Whoever holds
   it lets it go: the centre cannot lift a hold you put on, and you cannot
   lift the centre's. Either of you can call it off, and then nothing more
@@ -273,20 +286,20 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 77 files, tests included | pass |
+| PHP lint, 78 files, tests included | pass |
 | `tests/test-core.php` — 85 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
 | `tests/test-features.php` — 80 assertions | pass |
-| `tests/test-webhooks.php` — 50 assertions | pass |
+| `tests/test-webhooks.php` — 53 assertions | pass |
 | `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
-| `tests/test-foundations.php` — 158 assertions | pass |
-| `tests/test-central.php` — 136 assertions | pass |
+| `tests/test-foundations.php` — 159 assertions | pass |
+| `tests/test-central.php` — 141 assertions | pass |
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
-| `tests/test-central-campaigns.php` — 262 assertions | pass |
+| `tests/test-central-campaigns.php` — 319 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |
@@ -319,6 +332,16 @@ application's test rig: the plain-text part of every email had no links in
 it, the unsubscribe link among them. The converter wrote each as
 `text <address>` and then removed it with the tags. Links are now set aside
 before the tags go and put back afterwards.
+
+Two more, found by reading two providers' documentation again when their
+reports began to be matched to messages. Postmark names the reader of a
+*delivery* `Recipient`, where a bounce has `Email`: no delivery through
+Postmark was ever read, so a soft-bounce count there was never cleared by
+one. And Resend calls a bounce that may pass `Temporary`; only
+`transient` was known, so a full mailbox retired its address. Both are
+read now. A third is known and **not changed**: Postmark's
+`SubscriptionChange` names its reader `Recipient` too, so a suppression
+at Postmark does not unsubscribe anybody here.
 
 ## Licence
 

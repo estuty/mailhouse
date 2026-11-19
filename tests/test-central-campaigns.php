@@ -21,6 +21,10 @@
  * message which may have gone is tried again only on the centre's word;
  * and that a test creates nothing.
  *
+ * And what this site's provider says of a message afterwards: written
+ * beside the message it is of and no other, told to a centre that has a
+ * word for it and to no other, once, with no address in it.
+ *
  * Usage: php tests/test-central-campaigns.php
  *
  * @package Mailhouse
@@ -105,6 +109,9 @@ final class MHC_Centre {
 
 	/** @var string ok, down, paused (the website is, at the centre), or lost (something in between answers 404). */
 	public static $mode = 'ok';
+
+	/** @var array What this centre says it can be told. An older one says nothing. */
+	public static $accepts = array();
 
 	/** @var array[] Every request seen. */
 	public static $requests = array();
@@ -610,6 +617,7 @@ final class MHC_Centre {
 				'ack_through_seq'  => 0,
 				'want'             => array(),
 				'epoch'            => 1,
+				'accepts'          => self::$accepts,
 				'accepted'         => true,
 				'removed'          => 0,
 			)
@@ -1045,7 +1053,7 @@ check( 'and holds nowhere an address could be', ! array_intersect( array( 'email
 check( 'an execution can be written down only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$remote_table} WHERE Key_name = 'execution_id' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
 check( 'the queue records when a message was handed to the transport', in_array( 'attempt_started_at', (array) $wpdb->get_col( "SHOW COLUMNS FROM {$queue_table}" ), true ) ); // phpcs:ignore WordPress.DB
 check( 'a job id can be in the queue only once', (bool) $wpdb->get_var( "SHOW INDEX FROM {$queue_table} WHERE Key_name = 'remote_job' AND Non_unique = 0" ) ); // phpcs:ignore WordPress.DB
-check( 'the schema version is 1.6.0', '1.6.0' === Mailhouse_Install::DB_VERSION && '1.6.0' === get_option( 'mailhouse_db_version' ) );
+check( 'the schema version is 1.7.0', '1.7.0' === Mailhouse_Install::DB_VERSION && '1.7.0' === get_option( 'mailhouse_db_version' ) );
 check( 'uninstalling removes the table with the others', false !== strpos( (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mailhouse-install.php' ), "array( 'remote_campaigns', 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' )" ) ); // phpcs:ignore
 
 // ---------------------------------------------------------------------------
@@ -2635,6 +2643,410 @@ check( 'a body with nothing left once cleaned: refused', mhc_is( $answer, 'rejec
 
 Mailhouse_Settings::set( array( 'fallback_mailer' => '' ) );
 Mailhouse_Settings::flush();
+
+// ---------------------------------------------------------------------------
+echo "\nWhat its provider says of a message afterwards\n";
+
+$GLOBALS['mhc_transport'] = null;
+Mailhouse_Central_Delivery::listen();
+delete_option( Mailhouse_Central_Delivery::HEARD_OPTION );
+
+// Whatever earlier parts of this file left owed is told first, and set aside.
+Mailhouse_Central_Campaigns::network();
+// phpcs:ignore WordPress.DB
+$wpdb->query( "UPDATE {$queue_table} SET reported = 2 WHERE reported IN (1, 3)" );
+
+/**
+ * A provider calls with one event, in SendGrid's own shape: `delivered`,
+ * `bounce` (with `type` => `blocked` for one that may pass), `spamreport`.
+ */
+function mhc_provider_says( $kind, $email, $message_id, array $more = array() ) {
+	static $said = 0;
+
+	++$said;
+
+	return Mailhouse_Webhooks::process(
+		'sendgrid',
+		(string) wp_json_encode(
+			array(
+				array_merge(
+					array(
+						'event'         => $kind,
+						'email'         => $email,
+						// What the send call returned, and then SendGrid's own routing.
+						'sg_message_id' => $message_id . '.filterdrecv-5d4f7c-1',
+						'sg_event_id'   => 'event-' . $said,
+						'timestamp'     => time() - 30,
+					),
+					$more
+				),
+			)
+		)
+	);
+}
+
+$columns = (array) $wpdb->get_col( "SHOW COLUMNS FROM {$queue_table}" ); // phpcs:ignore WordPress.DB
+check( 'the queue has somewhere to write what a provider said of a message', ! array_diff( array( 'delivered_at', 'bounced_at', 'bounce_class', 'bounce_reason', 'complained_at' ), $columns ), implode( ',', $columns ) );
+check( 'and a message can be found by what its provider called it', (bool) $wpdb->get_var( "SHOW INDEX FROM {$queue_table} WHERE Key_name = 'provider_message'" ) ); // phpcs:ignore WordPress.DB
+
+$central_source = (string) file_get_contents( dirname( __DIR__ ) . '/includes/central/class-mailhouse-central.php' ); // phpcs:ignore
+check( 'a site that is not connected writes none of it down', false !== strpos( $central_source, "'' === Mailhouse_Central_Identity::status()" ) && strpos( $central_source, 'Mailhouse_Central_Delivery::listen()' ) > strpos( $central_source, "'' === Mailhouse_Central_Identity::status()" ) );
+
+$seven                          = mhc_people( 7 );
+list( $payload, $row, $post_d ) = mhc_prepared( $seven );
+$exec_d                         = $payload['execution_id'];
+$jobs_d                         = MHC_Centre::$executions[ $exec_d ]['list'];
+$emails_d                       = array();
+
+foreach ( $seven as $id ) {
+	$emails_d[ $id ] = Mailhouse_Subscribers::get( $id )->email;
+}
+
+mhc_send();
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+
+// What the transport called the message to somebody, and what the centre
+// has been told of it.
+$called  = static function ( $local ) use ( $emails_d ) {
+	return 'sg-' . md5( $emails_d[ $local ] );
+};
+$said_of = static function ( $local, $type = '' ) use ( $exec_d, $jobs_d ) {
+	return array_values(
+		array_filter(
+			mhc_heard( $exec_d, $type ),
+			static function ( $event ) use ( $jobs_d, $local ) {
+				return $event['job_id'] === $jobs_d[ $local ];
+			}
+		)
+	);
+};
+$stamp   = static function ( $time ) {
+	return gmdate( 'Y-m-d\TH:i:s\Z', $time );
+};
+
+check( 'seven messages sent, and the centre told so', 'sent:7' === mhc_tally( $post_d ) && 7 === count( mhc_heard( $exec_d, 'accepted' ) ) && 0 === Mailhouse_Central_Campaigns::unreported( $post_d ), mhc_tally( $post_d ) );
+
+// ---- a centre that has no word for it: nothing is said, and nothing is lost ----
+$when   = time() - 90;
+$before = count( mhc_heard( $exec_d ) );
+$result = mhc_provider_says( 'delivered', $emails_d[ $seven[0] ], $called( $seven[0] ), array( 'timestamp' => $when ) );
+$rows   = mhc_queue( $post_d );
+
+check( 'the provider’s call is taken as it always was', is_array( $result ) && 1 === $result['received'] );
+check( 'a delivery is written beside the message it was of, at the time the provider gave', gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[0] ]->delivered_at && null === $rows[ $seven[1] ]->delivered_at, wp_json_encode( $rows[ $seven[0] ] ) );
+check( 'a centre that has not said it takes such news is owed none', ! Mailhouse_Central_Delivery::accepted() && 2 === (int) $rows[ $seven[0] ]->reported );
+
+Mailhouse_Central_Campaigns::network();
+check( 'and is told none, in no words it does not know', $before === count( mhc_heard( $exec_d ) ) && ! array_key_exists( 'provider_reports', (array) MHC_Centre::last_said( $exec_d ) ) );
+
+// The same message is opened: that is owed, and is told in the words an
+// older centre has. The delivery written beside it is still not said.
+mhc_engage( 'open', (int) $rows[ $seven[0] ]->id );
+Mailhouse_Central_Campaigns::network();
+check( 'a message owed for another reason is told of that, and still not of what the provider said', 1 === count( $said_of( $seven[0], 'opened' ) ) && 0 === count( $said_of( $seven[0], 'delivered' ) ) && $before + 1 === count( mhc_heard( $exec_d ) ) && ! array_key_exists( 'provider_reports', (array) MHC_Centre::last_said( $exec_d ) ) && 2 === (int) mhc_queue( $post_d )[ $seven[0] ]->reported, wp_json_encode( $said_of( $seven[0] ) ) );
+
+// ---- the centre says it takes it ----
+MHC_Centre::$accepts = array( 'delivery.events.v1', 'something.later.v9', 'Not A Name', 7 );
+mhc_tick();
+$rows = mhc_queue( $post_d );
+
+check( 'what the centre says it takes is noted, and only what is a name', Mailhouse_Central_Delivery::accepted() && array( 'delivery.events.v1', 'something.later.v9' ) === Mailhouse_Central_Identity::get( 'centre_accepts' ), wp_json_encode( Mailhouse_Central_Identity::get( 'centre_accepts' ) ) );
+check( 'what was noted while it could not be told becomes owed, and nothing else does', 3 === (int) $rows[ $seven[0] ]->reported && 2 === (int) $rows[ $seven[1] ]->reported );
+
+Mailhouse_Central_Campaigns::network();
+$told = $said_of( $seven[0], 'delivered' );
+
+check(
+	'the centre is told: delivered, which message, and when; and nothing else',
+	1 === count( $told ) && array(
+		'job_id' => $jobs_d[ $seven[0] ],
+		'type'   => 'delivered',
+		'at'     => $stamp( $when ),
+	) === $told[0],
+	wp_json_encode( $told )
+);
+check( 'and that message is owed nothing more', 2 === (int) mhc_queue( $post_d )[ $seven[0] ]->reported );
+check( 'each report says whether this site’s provider calls: it has', true === MHC_Centre::last_said( $exec_d )['provider_reports'] );
+
+// ---- a bounce that will not pass ----
+mhc_provider_says(
+	'bounce',
+	$emails_d[ $seven[1] ],
+	$called( $seven[1] ),
+	array(
+		'reason'    => '550 5.1.1 <' . $emails_d[ $seven[1] ] . '>: no such user here',
+		'timestamp' => $when,
+	)
+);
+// And one that may.
+mhc_provider_says(
+	'bounce',
+	$emails_d[ $seven[2] ],
+	$called( $seven[2] ),
+	array(
+		'type'      => 'blocked',
+		'reason'    => 'mailbox full',
+		'timestamp' => $when,
+	)
+);
+$rows = mhc_queue( $post_d );
+
+check( 'a bounce is written beside its message: when, that it will not pass, and why', 'hard' === $rows[ $seven[1] ]->bounce_class && gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[1] ]->bounced_at && false !== strpos( (string) $rows[ $seven[1] ]->bounce_reason, 'no such user here' ), wp_json_encode( $rows[ $seven[1] ] ) );
+check( 'with the address taken out of what the provider said', false === strpos( (string) $rows[ $seven[1] ]->bounce_reason, '@' ) && false !== strpos( (string) $rows[ $seven[1] ]->bounce_reason, '[address]' ), (string) $rows[ $seven[1] ]->bounce_reason );
+check( 'the address is retired on this site, as it always was', 'bounced' === Mailhouse_Subscribers::get( $seven[1] )->status );
+check( 'one that may pass is written as that', 'soft' === $rows[ $seven[2] ]->bounce_class && 'mailbox full' === $rows[ $seven[2] ]->bounce_reason && 'subscribed' === Mailhouse_Subscribers::get( $seven[2] )->status );
+check( 'both are owed to the centre', 3 === (int) $rows[ $seven[1] ]->reported && 3 === (int) $rows[ $seven[2] ]->reported );
+
+Mailhouse_Central_Campaigns::network();
+$hard = $said_of( $seven[1], 'bounced' );
+$soft = $said_of( $seven[2], 'bounced' );
+
+check( 'the centre is told of the one that will not pass, and why, with no address', 1 === count( $hard ) && 'hard' === $hard[0]['class'] && $stamp( $when ) === $hard[0]['at'] && false !== strpos( $hard[0]['reason'], 'no such user here' ) && false === strpos( $hard[0]['reason'], '@' ) && array( 'job_id', 'type', 'at', 'class', 'reason' ) === array_keys( $hard[0] ), wp_json_encode( $hard ) );
+check( 'and of the one that may', 1 === count( $soft ) && 'soft' === $soft[0]['class'] && 'mailbox full' === $soft[0]['reason'], wp_json_encode( $soft ) );
+
+// ---- turned away, and then delivered ----
+mhc_provider_says( 'delivered', $emails_d[ $seven[2] ], $called( $seven[2] ), array( 'timestamp' => $when + 30 ) );
+Mailhouse_Central_Campaigns::network();
+$rows = mhc_queue( $post_d );
+check( 'a message turned away for now and then delivered is told as delivered, later', 1 === count( $said_of( $seven[2], 'delivered' ) ) && $stamp( $when + 30 ) === $said_of( $seven[2], 'delivered' )[0]['at'] && 'soft' === $rows[ $seven[2] ]->bounce_class && 2 === (int) $rows[ $seven[2] ]->reported, wp_json_encode( $said_of( $seven[2] ) ) );
+
+// ---- may pass, then will not; and never back ----
+mhc_provider_says( 'bounce', $emails_d[ $seven[3] ], $called( $seven[3] ), array( 'type' => 'blocked', 'reason' => 'try later' ) );
+mhc_provider_says( 'bounce', $emails_d[ $seven[3] ], $called( $seven[3] ), array( 'reason' => 'gone for good', 'timestamp' => $when ) );
+mhc_provider_says( 'bounce', $emails_d[ $seven[3] ], $called( $seven[3] ), array( 'type' => 'blocked', 'reason' => 'try later again' ) );
+$rows = mhc_queue( $post_d );
+check( 'a bounce that will not pass replaces one that might, and nothing replaces it', 'hard' === $rows[ $seven[3] ]->bounce_class && 'gone for good' === $rows[ $seven[3] ]->bounce_reason && gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[3] ]->bounced_at, wp_json_encode( $rows[ $seven[3] ] ) );
+
+Mailhouse_Central_Campaigns::network();
+check( 'and the centre is told the one thing it came to', 1 === count( $said_of( $seven[3], 'bounced' ) ) && 'hard' === $said_of( $seven[3], 'bounced' )[0]['class'], wp_json_encode( $said_of( $seven[3] ) ) );
+
+// ---- marked as spam ----
+mhc_provider_says( 'spamreport', $emails_d[ $seven[4] ], $called( $seven[4] ), array( 'timestamp' => $when ) );
+$rows = mhc_queue( $post_d );
+check( 'a complaint is written beside its message', gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[4] ]->complained_at && null === $rows[ $seven[4] ]->delivered_at );
+check( 'and its reader is unsubscribed here, as they always were', 'unsubscribed' === Mailhouse_Subscribers::get( $seven[4] )->status );
+
+Mailhouse_Central_Campaigns::network();
+$told = $said_of( $seven[4], 'complained' );
+check(
+	'the centre is told: marked as spam, which message, and when',
+	1 === count( $told ) && array(
+		'job_id' => $jobs_d[ $seven[4] ],
+		'type'   => 'complained',
+		'at'     => $stamp( $when ),
+	) === $told[0],
+	wp_json_encode( $told )
+);
+
+// ---- said twice ----
+$before = count( mhc_heard( $exec_d ) );
+mhc_provider_says( 'delivered', $emails_d[ $seven[0] ], $called( $seven[0] ), array( 'timestamp' => $when + 60 ) );
+mhc_provider_says( 'spamreport', $emails_d[ $seven[4] ], $called( $seven[4] ), array( 'timestamp' => $when + 60 ) );
+$rows = mhc_queue( $post_d );
+Mailhouse_Central_Campaigns::network();
+check( 'the same thing said again changes nothing: the first time stands', gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[0] ]->delivered_at && gmdate( 'Y-m-d H:i:s', $when ) === $rows[ $seven[4] ]->complained_at && 2 === (int) $rows[ $seven[0] ]->reported && 2 === (int) $rows[ $seven[4] ]->reported );
+check( 'and the centre is not told again', $before === count( mhc_heard( $exec_d ) ) );
+
+// ---- what is about no message of the centre's ----
+mhc_provider_says( 'delivered', $emails_d[ $seven[5] ], 'sg-nobody-holds-this' );
+mhc_provider_says( 'delivered', 'somebody.else@' . MHC_DOMAIN, $called( $seven[5] ) );
+mhc_provider_says( 'delivered', $emails_d[ $seven[5] ], '', array( 'sg_message_id' => null ) );
+mhc_provider_says( 'unsubscribe', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$rows = mhc_queue( $post_d );
+check( 'a report with a name for the message that this site does not hold is about no message', null === $rows[ $seven[5] ]->delivered_at );
+check( 'nor is one that names another address, nor one with no name for the message at all', null === $rows[ $seven[5] ]->delivered_at && 2 === (int) $rows[ $seven[5] ]->reported );
+check( 'somebody who left at the provider is unsubscribed here, and nothing is written beside the message', 'unsubscribed' === Mailhouse_Subscribers::get( $seven[6] )->status && null === $rows[ $seven[6] ]->delivered_at && null === $rows[ $seven[6] ]->complained_at && 2 === (int) $rows[ $seven[6] ]->reported );
+
+// A message of one of this site's own campaigns, with a name of its own.
+// phpcs:ignore WordPress.DB
+$wpdb->insert(
+	$queue_table,
+	array(
+		'campaign_id'         => 999999001,
+		'subscriber_id'       => $seven[5],
+		'email'               => $emails_d[ $seven[5] ],
+		'status'              => 'sent',
+		'scheduled_at'        => mailhouse_now(),
+		'sent_at'             => mailhouse_now(),
+		'provider_message_id' => 'sg-this-sites-own',
+	)
+);
+$own = (int) $wpdb->insert_id;
+mhc_provider_says( 'delivered', $emails_d[ $seven[5] ], 'sg-this-sites-own' );
+mhc_provider_says( 'bounce', $emails_d[ $seven[5] ], 'sg-this-sites-own', array( 'type' => 'blocked' ) );
+// phpcs:ignore WordPress.DB
+$kept = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$queue_table} WHERE id = %d", $own ) );
+check( 'a message of one of this site’s own campaigns is left exactly as it was', $kept && null === $kept->delivered_at && null === $kept->bounced_at && 0 === (int) $kept->reported );
+// phpcs:ignore WordPress.DB
+$wpdb->delete( $queue_table, array( 'id' => $own ) );
+// The soft bounce counted against the address, as it always did: put it back.
+Mailhouse_Subscribers::update( $seven[5], array( 'bounces' => 0 ) );
+
+// ---- something said while a report is on its way ----
+mhc_provider_says( 'delivered', $emails_d[ $seven[5] ], $called( $seven[5] ), array( 'timestamp' => $when ) );
+$racing = static function ( $pre, $args, $url ) use ( $emails_d, $seven, $called, $when ) {
+	static $done = false;
+
+	if ( ! $done && false !== strpos( $url, '/events' ) ) {
+		$done = true;
+		mhc_provider_says( 'spamreport', $emails_d[ $seven[5] ], $called( $seven[5] ), array( 'timestamp' => $when + 45 ) );
+	}
+
+	return $pre;
+};
+add_filter( 'pre_http_request', $racing, 5, 3 );
+Mailhouse_Central_Campaigns::network();
+remove_filter( 'pre_http_request', $racing, 5 );
+$rows = mhc_queue( $post_d );
+
+check( 'a complaint that lands while the delivery is being told is not lost: the message stays owed', 3 === (int) $rows[ $seven[5] ]->reported && null !== $rows[ $seven[5] ]->complained_at && 0 === count( $said_of( $seven[5], 'complained' ) ) && 1 === count( $said_of( $seven[5], 'delivered' ) ), wp_json_encode( $said_of( $seven[5] ) ) );
+
+Mailhouse_Central_Campaigns::network();
+check( 'and is told the next time', 1 === count( $said_of( $seven[5], 'complained' ) ) && $stamp( $when + 45 ) === $said_of( $seven[5], 'complained' )[0]['at'] && 2 === (int) mhc_queue( $post_d )[ $seven[5] ]->reported, wp_json_encode( $said_of( $seven[5] ) ) );
+
+// ---- a campaign the centre no longer knows ----
+// phpcs:ignore WordPress.DB
+$wpdb->update( $queue_table, array( 'reported' => 9 ), array( 'id' => (int) $rows[ $seven[6] ]->id ) );
+mhc_provider_says( 'delivered', $emails_d[ $seven[6] ], $called( $seven[6] ), array( 'timestamp' => $when ) );
+$rows = mhc_queue( $post_d );
+check( 'where there is nobody to tell, it is written down and owed to nobody', 9 === (int) $rows[ $seven[6] ]->reported && null !== $rows[ $seven[6] ]->delivered_at );
+// phpcs:ignore WordPress.DB
+$wpdb->update( $queue_table, array( 'reported' => 2, 'delivered_at' => null ), array( 'id' => (int) $rows[ $seven[6] ]->id ) );
+
+// ---- somebody forgotten ----
+Mailhouse_Central_Commands::forget( $seven[2], $emails_d[ $seven[2] ] );
+$rows = mhc_queue( $post_d );
+check( 'forgetting somebody takes what the provider said of their mail with their address', '' === $rows[ $seven[2] ]->email && null === $rows[ $seven[2] ]->bounce_reason && 'soft' === $rows[ $seven[2] ]->bounce_class );
+mhc_provider_says( 'spamreport', $emails_d[ $seven[2] ], $called( $seven[2] ), array( 'timestamp' => $when + 50 ) );
+$rows = mhc_queue( $post_d );
+check( 'a report about their message afterwards is matched by the message’s name alone', gmdate( 'Y-m-d H:i:s', $when + 50 ) === $rows[ $seven[2] ]->complained_at );
+Mailhouse_Central_Campaigns::network();
+
+// ---- what the centre has been told, as a whole ----
+$all   = mhc_heard( $exec_d );
+$kinds = array();
+$exact = true;
+
+foreach ( $all as $event ) {
+	$kinds[ $event['type'] ] = true;
+	$keys                    = array_keys( $event );
+
+	if ( 'delivered' === $event['type'] || 'complained' === $event['type'] ) {
+		$exact = $exact && array( 'job_id', 'type', 'at' ) === $keys;
+	} elseif ( 'bounced' === $event['type'] ) {
+		$exact = $exact && array( 'job_id', 'type', 'at', 'class' ) === array_slice( $keys, 0, 4 ) && ! array_diff( $keys, array( 'job_id', 'type', 'at', 'class', 'reason' ) );
+	}
+
+	$exact = $exact && 1 === preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $event['at'] );
+}
+
+check( 'three new things are said to the centre, each in its own shape and no other', isset( $kinds['delivered'], $kinds['bounced'], $kinds['complained'] ) && $exact, wp_json_encode( array_keys( $kinds ) ) );
+check( 'and there is no address in any of it', false === strpos( (string) wp_json_encode( $all ), '@' ) );
+check(
+	'the count of what the provider said, for this site’s own record of the campaign',
+	array(
+		'delivered'  => 3,
+		'bounced'    => 2,
+		'soft'       => 0,
+		'complained' => 3,
+	) === Mailhouse_Central_Delivery::counts( $post_d ),
+	wp_json_encode( Mailhouse_Central_Delivery::counts( $post_d ) )
+);
+
+ob_start();
+Mailhouse_Central_Campaigns::panel( get_post( $post_d ) );
+$panel = (string) ob_get_clean();
+check( 'the record on this site says what its provider said', false !== strpos( $panel, 'Its provider says' ) && false !== strpos( $panel, '3 delivered' ) && false !== strpos( $panel, '2 bounced' ) && false !== strpos( $panel, '3 marked as spam' ), wp_strip_all_tags( $panel ) );
+
+// ---- said before the centre has heard that the transport took it ----
+$two                         = mhc_people( 2 );
+list( $payload_e, , $post_e ) = mhc_prepared( $two );
+$exec_e                      = $payload_e['execution_id'];
+$jobs_e                      = MHC_Centre::$executions[ $exec_e ]['list'];
+$first                       = Mailhouse_Subscribers::get( $two[0] )->email;
+$second                      = Mailhouse_Subscribers::get( $two[1] )->email;
+
+mhc_send();
+mhc_provider_says( 'delivered', $first, 'sg-' . md5( $first ), array( 'timestamp' => time() - 5 ) );
+// A provider whose clock runs a day ahead.
+mhc_provider_says( 'delivered', $second, 'sg-' . md5( $second ), array( 'timestamp' => time() + DAY_IN_SECONDS ) );
+$rows = mhc_queue( $post_e );
+check( 'a delivery that arrives before the centre has been told the transport took the message waits for that', 1 === (int) $rows[ $two[0] ]->reported && null !== $rows[ $two[0] ]->delivered_at );
+check( 'a time that has not come yet is not believed: it is written as now', strtotime( $rows[ $two[1] ]->delivered_at . ' UTC' ) <= time() && strtotime( $rows[ $two[1] ]->delivered_at . ' UTC' ) > time() - 60, (string) $rows[ $two[1] ]->delivered_at );
+
+Mailhouse_Central_Campaigns::local();
+Mailhouse_Central_Campaigns::network();
+
+$order = array();
+
+foreach ( mhc_heard( $exec_e ) as $event ) {
+	if ( $event['job_id'] === $jobs_e[ $two[0] ] ) {
+		$order[] = $event['type'];
+	}
+}
+
+check( 'and both are told together, in the order they happened', array( 'accepted', 'delivered' ) === $order && 2 === (int) mhc_queue( $post_e )[ $two[0] ]->reported, wp_json_encode( $order ) );
+
+// ---- whether a provider calls at all ----
+$heard = Mailhouse_Central_Delivery::heard_from();
+check( 'that the provider has called is noted, and when', isset( $heard['sendgrid'] ) && abs( time() - $heard['sendgrid'] ) < 300 && array( 'sendgrid' ) === Mailhouse_Central_Delivery::callers(), wp_json_encode( $heard ) );
+
+$report = Mailhouse_Central_Status::report();
+check( 'each report in names the providers that call, and that this site can say which message', array( 'sendgrid' ) === $report['transport']['callbacks'] && in_array( 'delivery.events.v1', $report['capabilities'], true ), wp_json_encode( $report['transport'] ) );
+
+update_option( Mailhouse_Central_Delivery::HEARD_OPTION, array( 'sendgrid' => time() - 10 ), false );
+mhc_provider_says( 'delivered', $first, 'sg-nobody-holds-this' );
+$again = Mailhouse_Central_Delivery::heard_from();
+check( 'it is not written down again for every message', $again['sendgrid'] <= time() - 10 );
+
+update_option( Mailhouse_Central_Delivery::HEARD_OPTION, array( 'sendgrid' => time() - 400 ), false );
+mhc_provider_says( 'delivered', $first, 'sg-nobody-holds-this' );
+$again = Mailhouse_Central_Delivery::heard_from();
+check( 'but is after a few minutes', $again['sendgrid'] > time() - 60 );
+
+update_option(
+	Mailhouse_Central_Delivery::HEARD_OPTION,
+	array(
+		'sendgrid' => time() - 31 * DAY_IN_SECONDS,
+		'nonsense' => time(),
+		'postmark' => 'yesterday',
+	),
+	false
+);
+check( 'a provider not heard from for a month is not one that calls', array() === Mailhouse_Central_Delivery::callers() && false === Mailhouse_Central_Delivery::reports() && array( 'sendgrid' ) === array_keys( Mailhouse_Central_Delivery::heard_from() ) );
+
+update_option( Mailhouse_Central_Delivery::HEARD_OPTION, array( 'sendgrid' => time() ), false );
+Mailhouse_Settings::set( array( 'campaign_mailer' => 'smtp' ) );
+Mailhouse_Settings::flush();
+check( 'nor does it count that one calls, where the newsletters leave another way', array( 'sendgrid' ) === Mailhouse_Central_Delivery::callers() && false === Mailhouse_Central_Delivery::reports() );
+mhc_engage( 'open', (int) mhc_queue( $post_e )[ $two[1] ]->id );
+Mailhouse_Central_Campaigns::network();
+check( 'and the centre is told so with the next report: none delivered would not be nought', false === MHC_Centre::last_said( $exec_e )['provider_reports'], wp_json_encode( MHC_Centre::last_said( $exec_e ) ) );
+Mailhouse_Settings::set( array( 'campaign_mailer' => '' ) );
+Mailhouse_Settings::flush();
+check( 'where they leave through the one that calls, it does', true === Mailhouse_Central_Delivery::reports() );
+
+// A call that is not the provider's.
+delete_option( Mailhouse_Central_Delivery::HEARD_OPTION );
+Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE' ) );
+Mailhouse_Settings::flush();
+$result = mhc_provider_says( 'delivered', $emails_d[ $seven[6] ], $called( $seven[6] ) );
+$rows   = mhc_queue( $post_d );
+check( 'a call whose signature is wrong is not the provider calling, and writes nothing', is_wp_error( $result ) && array() === Mailhouse_Central_Delivery::heard_from() && null === $rows[ $seven[6] ]->delivered_at );
+Mailhouse_Settings::set( array( 'webhook_sendgrid_key' => '' ) );
+Mailhouse_Settings::flush();
+
+check( 'in a sentence, for this site’s administrator: nothing heard', false !== strpos( Mailhouse_Central_Delivery::summary(), 'nothing heard from SendGrid' ), Mailhouse_Central_Delivery::summary() );
+mhc_provider_says( 'delivered', $first, 'sg-nobody-holds-this' );
+check( 'and once it has called', false !== strpos( Mailhouse_Central_Delivery::summary(), 'SendGrid last called' ), Mailhouse_Central_Delivery::summary() );
+
+// An older centre again: the words go back out of use.
+MHC_Centre::$accepts = array();
+mhc_tick();
+check( 'a centre that stops saying it takes such news is told no more of it', ! Mailhouse_Central_Delivery::accepted() );
+MHC_Centre::$accepts = array( 'delivery.events.v1' );
+mhc_tick();
 
 // ---------------------------------------------------------------------------
 echo "\nA copy of the site, and a site switched off\n";

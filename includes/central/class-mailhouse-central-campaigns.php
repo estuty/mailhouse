@@ -26,7 +26,9 @@
  *
  * 6. What became of each message is told to the centre as it happens: the
  *    transport took it, refused it, or did not say; it was not sent. So is
- *    a first open and a first click, where this site records them.
+ *    a first open and a first click, where this site records them; and so
+ *    is what this site's provider says afterwards, where it says anything:
+ *    delivered, bounced, marked as spam (`Mailhouse_Central_Delivery`).
  *
  * Taking the same request in twice makes one campaign: the execution's id
  * is unique here, and a repeat carries on where the first stopped.
@@ -118,8 +120,9 @@ class Mailhouse_Central_Campaigns {
 	const REPORTED_DONE = 2;
 
 	/**
-	 * The centre has been told what became of it, and is owed a first open
-	 * or click that happened since.
+	 * The centre has been told what became of it, and is owed something
+	 * that has happened since: a first open or click, or what this site's
+	 * provider has said of it.
 	 */
 	const REPORTED_ENGAGED = 3;
 
@@ -1602,7 +1605,7 @@ class Mailhouse_Central_Campaigns {
 			}
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-			$page = (array) $wpdb->get_results( $wpdb->prepare( "SELECT id, campaign_id, remote_job_id, status, attempts, error, error_class, sent_at, opened_at, clicked_at, provider_message_id, reported FROM {$queue} WHERE reported = %d AND remote_job_id IS NOT NULL{$not} ORDER BY id ASC LIMIT %d", $kind, $room ) );
+			$page = (array) $wpdb->get_results( $wpdb->prepare( "SELECT id, campaign_id, remote_job_id, status, attempts, error, error_class, sent_at, opened_at, clicked_at, provider_message_id, reported, delivered_at, bounced_at, bounce_class, bounce_reason, complained_at FROM {$queue} WHERE reported = %d AND remote_job_id IS NOT NULL{$not} ORDER BY id ASC LIMIT %d", $kind, $room ) );
 
 			$found = array_merge( $found, $page );
 		}
@@ -1737,13 +1740,74 @@ class Mailhouse_Central_Campaigns {
 			);
 		}
 
+		// What this site's provider said of it afterwards. Only of a
+		// message a transport took, and only to a centre that has said it
+		// has a word for it: an older one would refuse the whole report.
+		if ( 'sent' === (string) $item->status && Mailhouse_Central_Delivery::accepted() ) {
+			if ( ! empty( $item->delivered_at ) ) {
+				$events[] = array(
+					'job_id' => $job,
+					'type'   => 'delivered',
+					'at'     => self::at( $item->delivered_at ),
+				);
+			}
+
+			if ( ! empty( $item->bounced_at ) ) {
+				$event = array(
+					'job_id' => $job,
+					'type'   => 'bounced',
+					'at'     => self::at( $item->bounced_at ),
+					'class'  => 'hard' === (string) $item->bounce_class ? 'hard' : 'soft',
+				);
+
+				if ( '' !== (string) $item->bounce_reason ) {
+					$event['reason'] = self::said( (string) $item->bounce_reason );
+				}
+
+				$events[] = $event;
+			}
+
+			if ( ! empty( $item->complained_at ) ) {
+				$events[] = array(
+					'job_id' => $job,
+					'type'   => 'complained',
+					'at'     => self::at( $item->complained_at ),
+				);
+			}
+		}
+
 		return $events;
 	}
 
 	/**
+	 * What had happened to a message when it was read, as a condition the
+	 * row must still meet for it to be marked as told.
+	 *
+	 * @param object $item A row of the queue, as it was read.
+	 * @return string SQL, with nothing in it but column names.
+	 */
+	protected static function as_read( $item ) {
+		$same = array(
+			$item->opened_at ? 'opened_at IS NOT NULL' : 'opened_at IS NULL',
+			$item->clicked_at ? 'clicked_at IS NOT NULL' : 'clicked_at IS NULL',
+			! empty( $item->delivered_at ) ? 'delivered_at IS NOT NULL' : 'delivered_at IS NULL',
+			! empty( $item->complained_at ) ? 'complained_at IS NOT NULL' : 'complained_at IS NULL',
+		);
+
+		if ( empty( $item->bounced_at ) ) {
+			$same[] = 'bounce_class IS NULL';
+		} else {
+			$same[] = 'hard' === (string) $item->bounce_class ? "bounce_class = 'hard'" : "bounce_class = 'soft'";
+		}
+
+		return implode( ' AND ', $same );
+	}
+
+	/**
 	 * Mark messages as told to the centre: each only if it is still as it
-	 * was when it was read. One that has been opened in the meantime stays
-	 * owed, and is told again with the open.
+	 * was when it was read. One that has been opened in the meantime, or
+	 * that this site's provider has said something of, stays owed, and is
+	 * told again with what is new.
 	 *
 	 * @param object[] $items Rows of the queue, as they were read.
 	 * @param int      $as    What to mark them.
@@ -1756,13 +1820,10 @@ class Mailhouse_Central_Campaigns {
 		$groups = array();
 
 		foreach ( $items as $item ) {
-			$groups[ ( $item->opened_at ? 'o' : '-' ) . ( $item->clicked_at ? 'c' : '-' ) ][] = (int) $item->id;
+			$groups[ self::as_read( $item ) ][] = (int) $item->id;
 		}
 
-		foreach ( $groups as $signature => $ids ) {
-			$same  = 'o' === $signature[0] ? 'opened_at IS NOT NULL' : 'opened_at IS NULL';
-			$same .= 'c' === $signature[1] ? ' AND clicked_at IS NOT NULL' : ' AND clicked_at IS NULL';
-
+		foreach ( $groups as $same => $ids ) {
 			foreach ( array_chunk( $ids, 500 ) as $chunk ) {
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 				$wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET reported = %d WHERE reported IN (1, 3) AND {$same} AND id IN (" . implode( ',', $chunk ) . ')', (int) $as ) );
@@ -1853,6 +1914,13 @@ class Mailhouse_Central_Campaigns {
 
 		if ( '' !== (string) $row->hold && 'paused' === $says ) {
 			$progress['held_by'] = (string) $row->hold;
+		}
+
+		// Whether this site hears what becomes of a message after its
+		// transport has taken it. Where it does not, none delivered is not
+		// zero. Said only to a centre that has a word for it.
+		if ( Mailhouse_Central_Delivery::accepted() ) {
+			$progress['provider_reports'] = Mailhouse_Central_Delivery::reports();
 		}
 
 		// What this site arrived at, with every report from ready onwards:
@@ -2234,6 +2302,35 @@ class Mailhouse_Central_Campaigns {
 
 		if ( $notes ) {
 			echo '<p class="description">' . esc_html( implode( '; ', $notes ) ) . '.</p>';
+		}
+
+		// What this site's provider has said since, where it says anything.
+		$after = Mailhouse_Central_Delivery::counts( $post->ID );
+		$said  = array();
+
+		if ( $after['delivered'] ) {
+			/* translators: %s: a number of messages. */
+			$said[] = sprintf( __( '%s delivered', 'mailhouse' ), number_format_i18n( $after['delivered'] ) );
+		}
+
+		if ( $after['bounced'] ) {
+			/* translators: %s: a number of messages. */
+			$said[] = sprintf( __( '%s bounced: no such address', 'mailhouse' ), number_format_i18n( $after['bounced'] ) );
+		}
+
+		if ( $after['soft'] ) {
+			/* translators: %s: a number of messages. */
+			$said[] = sprintf( __( '%s turned away for now', 'mailhouse' ), number_format_i18n( $after['soft'] ) );
+		}
+
+		if ( $after['complained'] ) {
+			/* translators: %s: a number of messages. */
+			$said[] = sprintf( __( '%s marked as spam', 'mailhouse' ), number_format_i18n( $after['complained'] ) );
+		}
+
+		if ( $said ) {
+			/* translators: %s: a list such as "40 delivered; 2 bounced: no such address". */
+			echo '<p class="description">' . esc_html( sprintf( __( 'Its provider says: %s.', 'mailhouse' ), implode( '; ', $said ) ) ) . '</p>';
 		}
 
 		if ( '' !== (string) $row->error ) {

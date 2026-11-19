@@ -1033,7 +1033,7 @@ class Mailhouse_Central_Commands {
 		// sent, and loses the address with every other row below.
 		$done['queue'] += Mailhouse_Queue::withdraw_remote( $id, __( 'No longer on the list.', 'mailhouse' ) );
 		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status IN ('pending', 'sending') AND remote_job_id IS NULL", $id ) );
-		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET email = '', error = NULL WHERE subscriber_id = %d AND ( email <> '' OR error IS NOT NULL )", $id ) );
+		$done['queue'] += (int) $wpdb->query( $wpdb->prepare( "UPDATE {$queue} SET email = '', error = NULL, bounce_reason = NULL WHERE subscriber_id = %d AND ( email <> '' OR error IS NOT NULL OR bounce_reason IS NOT NULL )", $id ) );
 
 		if ( '' !== $email ) {
 			// The address alone as well: a confirmation message is logged

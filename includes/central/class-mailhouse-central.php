@@ -71,6 +71,10 @@ class Mailhouse_Central {
 		// stopped at their deadline, and their recipients fetched.
 		Mailhouse_Central_Campaigns::listen();
 
+		// And what this site's provider says became of their messages
+		// afterwards.
+		Mailhouse_Central_Delivery::listen();
+
 		// Before the queue (priority 10), so that what the centre says is
 		// known before anything is sent.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'tick' ), 5 );
@@ -206,9 +210,24 @@ class Mailhouse_Central {
 
 		switch ( $answer['status'] ) {
 			case 200:
+				// What this centre can be told. One that does not say takes
+				// nothing but what every centre takes.
+				$accepts = array();
+
+				if ( isset( $body['accepts'] ) && is_array( $body['accepts'] ) ) {
+					foreach ( array_slice( $body['accepts'], 0, 32 ) as $name ) {
+						if ( is_string( $name ) && preg_match( '/^[a-z0-9][a-z0-9._-]{0,63}$/', $name ) ) {
+							$accepts[] = $name;
+						}
+					}
+				}
+
+				$took = Mailhouse_Central_Delivery::accepted();
+
 				Mailhouse_Central_Identity::update(
 					array(
 						'status'            => 'connected',
+						'centre_accepts'    => $accepts,
 						'centre_status'     => isset( $body['status'] ) && 'paused' === $body['status'] ? 'paused' : 'connected',
 						'suspended_reason'  => '',
 						'last_heartbeat_at' => $now,
@@ -227,6 +246,12 @@ class Mailhouse_Central {
 				// sequence has to start again.
 				if ( isset( $body['epoch'] ) ) {
 					Mailhouse_Central_Sync::new_epoch( (int) $body['epoch'] );
+				}
+
+				// A centre that has just begun to take what a provider said
+				// of a message is owed what was noted while it could not.
+				if ( ! $took && Mailhouse_Central_Delivery::accepted() ) {
+					Mailhouse_Central_Delivery::catch_up();
 				}
 
 				return true;

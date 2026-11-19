@@ -567,6 +567,7 @@ class Mailhouse_Central_Screen {
 				? sprintf( __( 'not kept: %s', 'mailhouse' ), $state['template_error'] )
 				: $this->when( $state['template_published_at'] ),
 			__( 'Newsletters sent for the centre', 'mailhouse' ) => $this->campaigns(),
+			__( 'What became of each message', 'mailhouse' ) => Mailhouse_Central_Delivery::summary(),
 			/* translators: %s: key fingerprint. */
 			__( 'This site’s key', 'mailhouse' )         => sprintf( __( '%s (the private half never leaves this site)', 'mailhouse' ), $state['key_id'] ),
 		);
