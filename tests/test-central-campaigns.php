@@ -1272,6 +1272,18 @@ MHC_Centre::$requests = array();
 Mailhouse_Central_Campaigns::network( time() );
 check( 'a run with no time left asks for nothing', 0 === MHC_Centre::$executions[ $execution ]['fetches'] && 'preparing' === mhc_row( $execution )->state );
 
+// Nor does a scheduled run that finds another at work on the connection:
+// two fetching one campaign's recipients would each queue them.
+$mhc_other = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
+$mhc_lock  = Mailhouse_Central::lock_name();
+$mhc_other->query( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) );
+Mailhouse_Central::begin();
+check( 'a scheduled run knows when another is at work on the connection', true === Mailhouse_Central::elsewhere() );
+Mailhouse_Central_Campaigns::network();
+check( 'and then fetches nothing, and leaves the campaign as it was', 0 === MHC_Centre::$executions[ $execution ]['fetches'] && array() === MHC_Centre::$requests && 'preparing' === mhc_row( $execution )->state && 0 === (int) mhc_row( $execution )->next_at );
+Mailhouse_Central::end();
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
 // The centre goes away after the first page.
 $pages = 0;
 $flaky = static function ( $pre, $args, $url ) use ( &$pages ) {
@@ -1377,9 +1389,18 @@ mhc_set( $execution, array( 'start_at' => gmdate( 'Y-m-d H:i:s', time() - 5 ) ) 
 MHC_Centre::$mode      = 'down';
 $GLOBALS['mhc_handed'] = array();
 
+// Not by a run that finds another at work: that one starts it.
+$mhc_other->query( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) );
+Mailhouse_Central::begin();
+Mailhouse_Central_Campaigns::local();
+check( 'a scheduled run that finds another at work starts nothing', 'ready' === mhc_row( $execution )->state && 'skipped:1 waiting:7' === mhc_tally( $post_id ), mhc_tally( $post_id ) );
+Mailhouse_Central::end();
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+$mhc_other->close();
+
 Mailhouse_Central_Campaigns::local();
 $row = mhc_row( $execution );
-check( 'the campaign starts', 'sending' === $row->state && null !== $row->started_at && 'pending:7 skipped:1' === mhc_tally( $post_id ), mhc_tally( $post_id ) );
+check( 'the campaign starts','sending' === $row->state && null !== $row->started_at && 'pending:7 skipped:1' === mhc_tally( $post_id ), mhc_tally( $post_id ) );
 check( 'this site shows it as being sent', 'sending' === get_post_meta( $post_id, '_mailhouse_status', true ) );
 
 // Somebody else unsubscribes after it has started, by a route that does not

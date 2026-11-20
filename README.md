@@ -115,6 +115,12 @@ you.
   fields, status, dates, source, sign-up IP address and tags; never their
   `manage_key` or `confirm_key`, their WordPress user id, or anything about
   how the site sends mail.
+- One scheduled run at a time talks to the centre. WordPress does not
+  always stop two from running together (its own guard lapses after a
+  minute, and a server's cron and a visitor can each start one); a run
+  that finds another at work leaves the centre to it and carries on with
+  the site's own mail. **Report in now** waits a few seconds for a run
+  that is in the middle, and says so if it has not finished.
 - If the centre cannot be reached the changes wait, and are sent in order
   when it can. After thirty days, or a hundred thousand of them, they are
   dropped and the two copies are compared instead; no subscriber is touched
@@ -312,11 +318,11 @@ mocks.
 | `tests/test-branding.php` — 89 assertions | pass |
 | `tests/test-updates.php` — 65 assertions | pass |
 | `tests/test-foundations.php` — 159 assertions | pass |
-| `tests/test-central.php` — 141 assertions | pass |
+| `tests/test-central.php` — 169 assertions | pass |
 | `tests/test-central-sync.php` — 145 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
-| `tests/test-central-campaigns.php` — 342 assertions | pass |
+| `tests/test-central-campaigns.php` — 345 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |
@@ -359,6 +365,18 @@ one. And Resend calls a bounce that may pass `Temporary`; only
 read now. A third is known and **not changed**: Postmark's
 `SubscriptionChange` names its reader `Recipient` too, so a suppression
 at Postmark does not unsubscribe anybody here.
+
+And one found by the central application's integrity run: an hour of
+sign-ups, edits, campaigns and faults at random on two sites, and then a
+count. Everything a site knows about its connection is one option, and a
+request wrote the whole of it back as it remembered it. Two scheduled
+runs at once therefore each undid what the other had written, including
+where the site's numbering of its changes stood; the centre was then sent
+numbers it already held for other changes, and took the site for one
+restored from a backup. Nobody's subscription was wrong at the end of it,
+but the centre compared the whole list again to be sure. A change to the
+connection now changes only its own fields, read and written under a lock
+of the database's, and one run at a time works the connection.
 
 ## Licence
 

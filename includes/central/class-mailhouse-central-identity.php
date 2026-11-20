@@ -169,19 +169,76 @@ class Mailhouse_Central_Identity {
 	 * @return void
 	 */
 	public static function update( array $changes ) {
-		$state = array_merge( self::state(), $changes );
+		global $wpdb;
 
-		if ( $state === self::$state && Mailhouse_Settings::get( self::FLAG_SETTING, false ) ) {
+		$connected = (bool) Mailhouse_Settings::get( self::FLAG_SETTING, false );
+
+		if ( ! $connected ) {
+			// No connection is stored: this is one being made.
+			$state       = array_merge( self::state(), $changes );
+			self::$state = $state;
+
+			update_option( self::OPTION, $state, true );
+			Mailhouse_Settings::set( array( self::FLAG_SETTING => true ) );
+
 			return;
 		}
 
-		self::$state = $state;
+		// Everything about the connection is one option, and this request
+		// has a copy of it from whenever it first looked. Written back
+		// whole, that copy would undo whatever another request had changed
+		// since: a scheduled run and an administrator's click, or two runs
+		// at once, would each put back the other's fields as they had been.
+		// One of those fields is where this site's numbering of its changes
+		// starts; put back, the centre is sent numbers it has already had
+		// for other changes, and takes the site for one restored from a
+		// backup. So: what is stored is read now, from the database, only
+		// what is being changed is changed, and nobody else does the same
+		// in between.
+		$name = Mailhouse_Central::lock_name() . '_state';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK( %s, 5 )', $name ) );
 
-		update_option( self::OPTION, $state, true );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$raw    = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", self::OPTION ) );
+		$stored = null === $raw ? null : maybe_unserialize( $raw );
 
-		if ( ! Mailhouse_Settings::get( self::FLAG_SETTING, false ) ) {
-			Mailhouse_Settings::set( array( self::FLAG_SETTING => true ) );
+		if ( ! is_array( $stored ) && empty( $changes['website_id'] ) ) {
+			// The connection has been taken away by another request while
+			// this one was at work. Nothing is written: it is not put back.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', $name ) );
+			self::$state = array_merge( self::defaults(), array( 'status' => '' ) );
+
+			return;
 		}
+
+		$before = array_merge( self::defaults(), is_array( $stored ) ? $stored : array() );
+		$state  = array_merge( $before, $changes );
+
+		if ( $state !== $before ) {
+			// WordPress compares with what it remembers of the option, which
+			// is as old as this request. It is told what is stored now.
+			$all = wp_load_alloptions();
+
+			if ( is_array( $all ) && array_key_exists( self::OPTION, $all ) ) {
+				$all[ self::OPTION ] = $raw;
+				wp_cache_set( 'alloptions', $all, 'options' );
+			} elseif ( null !== $raw ) {
+				wp_cache_set( self::OPTION, $raw, 'options' );
+			}
+
+			update_option( self::OPTION, $state, true );
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', $name ) );
+
+		if ( ! in_array( $state['status'], self::STATUSES, true ) ) {
+			$state['status'] = '';
+		}
+
+		self::$state = $state;
 	}
 
 	/**

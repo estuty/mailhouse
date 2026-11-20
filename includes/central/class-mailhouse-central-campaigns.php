@@ -638,6 +638,11 @@ class Mailhouse_Central_Campaigns {
 	 * @return void
 	 */
 	public static function local() {
+		// Another scheduled run is at work on the centre's campaigns.
+		if ( Mailhouse_Central::elsewhere() ) {
+			return;
+		}
+
 		$now  = self::now();
 		$send = self::may_send();
 
@@ -724,7 +729,7 @@ class Mailhouse_Central_Campaigns {
 	 * @return void
 	 */
 	public static function network( $deadline = null ) {
-		if ( Mailhouse_Central::disabled() || 'connected' !== Mailhouse_Central_Identity::status() || ! Mailhouse_Central_Identity::at_registered_address() ) {
+		if ( Mailhouse_Central::elsewhere() || Mailhouse_Central::disabled() || 'connected' !== Mailhouse_Central_Identity::status() || ! Mailhouse_Central_Identity::at_registered_address() ) {
 			return;
 		}
 

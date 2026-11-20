@@ -23,6 +23,12 @@ class Mailhouse_Central_Screen {
 	const NOTICE = 'mailhouse_central_notice_';
 
 	/**
+	 * Seconds somebody who pressed "report in now" waits for a scheduled
+	 * run that is in the middle of talking to the centre.
+	 */
+	const WAIT = 8;
+
+	/**
 	 * Register the hooks.
 	 */
 	public function __construct() {
@@ -256,17 +262,35 @@ class Mailhouse_Central_Screen {
 			$this->finish( 'error', __( 'This site is not at the address it registered from, so nothing was sent.', 'mailhouse' ) );
 		}
 
-		$result = Mailhouse_Central::heartbeat();
+		$result = null;
+		$push   = null;
+
+		// One request at a time works the connection: if a scheduled run is
+		// in the middle of it, this waits a few seconds for it to finish.
+		$done = Mailhouse_Central::alone(
+			static function () use ( &$result, &$push ) {
+				$result = Mailhouse_Central::heartbeat();
+
+				if ( is_wp_error( $result ) ) {
+					return;
+				}
+
+				// Asked for by a person, so sent now rather than when the last
+				// failure said to try again.
+				Mailhouse_Central_Identity::update( array( 'push_next_at' => 0 ) );
+
+				$push = Mailhouse_Central_Sync::push();
+			},
+			self::WAIT
+		);
+
+		if ( ! $done ) {
+			$this->finish( 'warning', __( 'This site is in the middle of a scheduled report to the centre, so nothing more was sent. Try again in a moment.', 'mailhouse' ) );
+		}
 
 		if ( is_wp_error( $result ) ) {
 			$this->finish( 'error', $result->get_error_message() );
 		}
-
-		// Asked for by a person, so sent now rather than when the last
-		// failure said to try again.
-		Mailhouse_Central_Identity::update( array( 'push_next_at' => 0 ) );
-
-		$push = Mailhouse_Central_Sync::push();
 
 		if ( '' !== $push['error'] ) {
 			/* translators: %s: what went wrong. */

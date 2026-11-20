@@ -75,6 +75,9 @@ class Mailhouse_Central {
 		// afterwards.
 		Mailhouse_Central_Delivery::listen();
 
+		// One scheduled run at a time works the connection: see begin().
+		add_action( 'mailhouse_process_queue', array( __CLASS__, 'begin' ), 1 );
+
 		// Before the queue (priority 10), so that what the centre says is
 		// known before anything is sent.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'tick' ), 5 );
@@ -82,6 +85,161 @@ class Mailhouse_Central {
 		// And after it, so that this site's own mail never waits on telling
 		// the centre what has changed.
 		add_action( 'mailhouse_process_queue', array( __CLASS__, 'push' ), 20 );
+
+		add_action( 'mailhouse_process_queue', array( __CLASS__, 'end' ), 99 );
+	}
+
+	/**
+	 * Whether this request holds the connection's lock.
+	 *
+	 * @var bool
+	 */
+	protected static $held = false;
+
+	/**
+	 * Whether another request was found at work on the connection when
+	 * this request's scheduled run began.
+	 *
+	 * @var bool
+	 */
+	protected static $elsewhere = false;
+
+	/**
+	 * The name of this site's lock, in its database.
+	 *
+	 * @return string
+	 */
+	public static function lock_name() {
+		global $wpdb;
+
+		return 'mailhouse_central_' . md5( DB_NAME . '|' . $wpdb->prefix );
+	}
+
+	/**
+	 * Take the connection's lock, if nobody has it.
+	 *
+	 * The lock is the database's own, held by this request's connection to
+	 * it: it is let go when the request ends, however it ends, and cannot
+	 * be left behind by a run that died.
+	 *
+	 * @param int $wait Seconds to wait for whoever has it.
+	 * @return bool Whether this request now holds it.
+	 */
+	protected static function take( $wait = 0 ) {
+		global $wpdb;
+
+		if ( self::$held ) {
+			return true;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$got = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK( %s, %d )', self::lock_name(), max( 0, (int) $wait ) ) );
+
+		// A database that will not say is no reason to stop reporting in:
+		// the run goes ahead, as it did before there was a lock.
+		if ( null !== $got && '1' !== (string) $got ) {
+			return false;
+		}
+
+		self::$held = true;
+
+		// What this request remembers of the connection is from before it
+		// had the lock. From here on, nobody else changes it.
+		Mailhouse_Central_Identity::flush();
+
+		return true;
+	}
+
+	/**
+	 * Let the connection's lock go.
+	 *
+	 * @return void
+	 */
+	protected static function give() {
+		global $wpdb;
+
+		if ( self::$held ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', self::lock_name() ) );
+			self::$held = false;
+		}
+	}
+
+	/**
+	 * A scheduled run begins.
+	 *
+	 * Two runs at once is not something WordPress always prevents: its own
+	 * guard lapses after a minute, a server's cron and a visitor can both
+	 * start one, and so can somebody at a command line. Two runs working
+	 * one connection would each report in, each send the same changes, each
+	 * collect the same requests, and each write down where the connection
+	 * stood as it remembered it. So the second finds the first at work and
+	 * leaves the connection alone; the site's own mail queue, which has a
+	 * guard of its own, is not affected.
+	 *
+	 * @return void
+	 */
+	public static function begin() {
+		self::$elsewhere = false;
+
+		// Not connected: nothing to guard, and not one query spent on it.
+		if ( self::disabled() || '' === Mailhouse_Central_Identity::status() ) {
+			return;
+		}
+
+		self::$elsewhere = ! self::take();
+	}
+
+	/**
+	 * A scheduled run ends.
+	 *
+	 * @return void
+	 */
+	public static function end() {
+		self::give();
+		self::$elsewhere = false;
+	}
+
+	/**
+	 * Whether the connection is another request's to work just now.
+	 *
+	 * @return bool
+	 */
+	public static function elsewhere() {
+		return self::$elsewhere;
+	}
+
+	/**
+	 * Do something that works the connection, alone. Within a scheduled
+	 * run the lock is already held; called by itself, this takes it for
+	 * as long as the work lasts. Where another request has it, nothing is
+	 * done: a scheduled run does not wait, since the next is a minute
+	 * away, and somebody who pressed a button waits a few seconds.
+	 *
+	 * @param callable $work What to do.
+	 * @param int      $wait Seconds to wait for another request to finish.
+	 * @return bool Whether it was done.
+	 */
+	public static function alone( $work, $wait = 0 ) {
+		if ( self::$elsewhere ) {
+			return false;
+		}
+
+		$mine = self::$held;
+
+		if ( ! $mine && ! self::take( $wait ) ) {
+			return false;
+		}
+
+		try {
+			call_user_func( $work );
+		} finally {
+			if ( ! $mine ) {
+				self::give();
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -122,22 +280,26 @@ class Mailhouse_Central {
 	 * @return void
 	 */
 	public static function push() {
-		if ( self::disabled() ) {
+		if ( self::disabled() || '' === Mailhouse_Central_Identity::status() ) {
 			return;
 		}
 
-		// Send what is waiting; then do a piece of the backfill or the
-		// comparison, which writes more; and so on until there is nothing
-		// to do or the time is up. One time box for all of it.
-		$deadline = time() + Mailhouse_Central_Sync::TIME_BOX;
+		self::alone(
+			static function () {
+				// Send what is waiting; then do a piece of the backfill or the
+				// comparison, which writes more; and so on until there is nothing
+				// to do or the time is up. One time box for all of it.
+				$deadline = time() + Mailhouse_Central_Sync::TIME_BOX;
 
-		do {
-			Mailhouse_Central_Sync::push( max( 1, $deadline - time() ) );
-		} while ( time() < $deadline && Mailhouse_Central_Reconcile::work( $deadline ) );
+				do {
+					Mailhouse_Central_Sync::push( max( 1, $deadline - time() ) );
+				} while ( time() < $deadline && Mailhouse_Central_Reconcile::work( $deadline ) );
 
-		// Last, and seldom: this site's email template, if the centre does
-		// not have it as it is now.
-		Mailhouse_Central_Template::work( max( 1, min( self::TICK_TIMEOUT, $deadline - time() ) ) );
+				// Last, and seldom: this site's email template, if the centre does
+				// not have it as it is now.
+				Mailhouse_Central_Template::work( max( 1, min( Mailhouse_Central::TICK_TIMEOUT, $deadline - time() ) ) );
+			}
+		);
 	}
 
 	/**
@@ -170,21 +332,25 @@ class Mailhouse_Central {
 			return;
 		}
 
-		$now   = time();
-		$state = Mailhouse_Central_Identity::state();
+		self::alone(
+			static function () {
+				$now   = time();
+				$state = Mailhouse_Central_Identity::state();
 
-		if ( $now < (int) $state['next_attempt_at'] || $now - (int) $state['last_heartbeat_at'] < self::MIN_INTERVAL ) {
-			Mailhouse_Central_Identity::update( array( 'last_tick_at' => $now ) );
-			return;
-		}
+				if ( $now < (int) $state['next_attempt_at'] || $now - (int) $state['last_heartbeat_at'] < Mailhouse_Central::MIN_INTERVAL ) {
+					Mailhouse_Central_Identity::update( array( 'last_tick_at' => $now ) );
+					return;
+				}
 
-		Mailhouse_Central_Identity::update( array( 'last_tick_at' => $now ) );
+				Mailhouse_Central_Identity::update( array( 'last_tick_at' => $now ) );
 
-		// What the centre has asked for is done here, before the queue runs:
-		// somebody the centre has just unsubscribed is not sent the next message.
-		if ( true === self::heartbeat( self::TICK_TIMEOUT ) ) {
-			Mailhouse_Central_Commands::work();
-		}
+				// What the centre has asked for is done here, before the queue runs:
+				// somebody the centre has just unsubscribed is not sent the next message.
+				if ( true === Mailhouse_Central::heartbeat( Mailhouse_Central::TICK_TIMEOUT ) ) {
+					Mailhouse_Central_Commands::work();
+				}
+			}
+		);
 	}
 
 	/**

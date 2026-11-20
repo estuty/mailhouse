@@ -1033,4 +1033,152 @@ update_option( 'blogname', $mhc_name );
 
 update_option( 'mailhouse_settings', $mhc_template_settings );
 
+// ---------------------------------------------------------------------------
+echo "\nTwo requests at once\n";
+
+// Everything about the connection is one option. A request has a copy of
+// it from whenever it first looked, and used to write that copy back
+// whole: whatever another request had changed in the meantime was put back
+// as it had been. One of those things is where this site's numbering of
+// its changes starts.
+mhc_connect();
+$mhc_stored = static function () use ( $wpdb ) {
+	// phpcs:ignore WordPress.DB
+	return maybe_unserialize( $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", Mailhouse_Central_Identity::OPTION ) ) );
+};
+$mhc_elsewhere = static function ( array $changes ) use ( $wpdb, $mhc_stored ) {
+	// Another request: straight to the database, behind this one's back.
+	// phpcs:ignore WordPress.DB
+	$wpdb->update( $wpdb->options, array( 'option_value' => maybe_serialize( array_merge( $mhc_stored(), $changes ) ) ), array( 'option_name' => Mailhouse_Central_Identity::OPTION ) );
+};
+
+$mhc_knew = Mailhouse_Central_Identity::state();
+$mhc_elsewhere(
+	array(
+		'seq_offset'   => 4242,
+		'outbox_acked' => 77,
+		'epoch'        => 3,
+	)
+);
+check( 'this request still remembers the connection as it was', 4242 !== (int) Mailhouse_Central_Identity::get( 'seq_offset' ) && (int) $mhc_knew['epoch'] === (int) Mailhouse_Central_Identity::get( 'epoch' ) );
+Mailhouse_Central_Identity::update( array( 'last_error' => 'something of this request’s own' ) );
+$mhc_now = $mhc_stored();
+check( 'what another request changed is not put back by one that had not looked since', 4242 === (int) $mhc_now['seq_offset'] && 77 === (int) $mhc_now['outbox_acked'] && 3 === (int) $mhc_now['epoch'], wp_json_encode( array( $mhc_now['seq_offset'], $mhc_now['outbox_acked'], $mhc_now['epoch'] ) ) );
+check( 'and what this one changed is kept beside it', 'something of this request’s own' === $mhc_now['last_error'] );
+check( 'and this request now knows what the other did', 4242 === (int) Mailhouse_Central_Identity::get( 'seq_offset' ) && 3 === (int) Mailhouse_Central_Identity::get( 'epoch' ) );
+check( 'WordPress is not left remembering the old one either', 4242 === (int) get_option( Mailhouse_Central_Identity::OPTION )['seq_offset'] );
+
+// A change that is to what the other request left: written, though it is
+// what this request remembered all along.
+$mhc_elsewhere( array( 'push_error' => 'said by the other' ) );
+Mailhouse_Central_Identity::update( array( 'push_error' => '' ) );
+check( 'a change back to what this request remembered is still a change', '' === $mhc_stored()['push_error'] );
+
+// A change that changes nothing writes nothing.
+$mhc_writes = 0;
+$mhc_count  = static function () use ( &$mhc_writes ) {
+	++$mhc_writes;
+};
+add_action( 'update_option_' . Mailhouse_Central_Identity::OPTION, $mhc_count );
+Mailhouse_Central_Identity::update( array( 'push_error' => '' ) );
+check( 'saying what is already so writes nothing', 0 === $mhc_writes );
+Mailhouse_Central_Identity::update( array( 'push_error' => 'x' ) );
+check( 'and saying something new writes once', 1 === $mhc_writes );
+remove_action( 'update_option_' . Mailhouse_Central_Identity::OPTION, $mhc_count );
+
+// One scheduled run at a time. The suite was loaded by a site that was not
+// connected, which hooks nothing: this is the plugin loading on one that is.
+new Mailhouse_Central();
+check(
+	'a connected site’s scheduled run begins by looking for another, and ends by letting go',
+	1 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'begin' ) )
+	&& 5 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'tick' ) )
+	&& 20 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'push' ) )
+	&& 99 === has_action( 'mailhouse_process_queue', array( 'Mailhouse_Central', 'end' ) )
+);
+$mhc_other = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
+$mhc_lock  = Mailhouse_Central::lock_name();
+check( 'the lock is this site’s, by a name its database can hold', strlen( $mhc_lock ) <= 64 && 0 === strpos( $mhc_lock, 'mailhouse_central_' ) );
+check( 'another request is at work on the connection', '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+mhc_due();
+mhc_requests();
+$mhc_before = $mhc_stored();
+$mhc_began  = microtime( true );
+do_action( 'mailhouse_process_queue' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals
+check( 'a scheduled run that finds another at work sends nothing', 0 === mhc_requests() );
+check( 'and does not wait for it: the next run is a minute away', microtime( true ) - $mhc_began < 1 );
+check( 'and writes nothing down about the connection', $mhc_before === $mhc_stored() );
+check( 'and is itself again once it is over', false === Mailhouse_Central::elsewhere() );
+Mailhouse_Central::tick();
+Mailhouse_Central::push();
+check( 'nor is anything sent by reporting in or sending, asked for by themselves', 0 === mhc_requests() );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+mhc_due();
+do_action( 'mailhouse_process_queue' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals
+check( 'once the other has finished, the next run reports in', mhc_requests() > 0 );
+check( 'and lets go of the lock when it is done', '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
+// Within a run, the lock is the run's from beginning to end: reporting
+// in does not let go of what sending is about to need.
+mhc_due();
+Mailhouse_Central::begin();
+Mailhouse_Central::tick();
+check( 'a run holds the lock between its parts', mhc_requests() > 0 && '0' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+Mailhouse_Central::end();
+check( 'and not after its end', '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
+// Reporting in by itself takes the lock for as long as it lasts, and no longer.
+mhc_due();
+Mailhouse_Central::tick();
+check( 'a run asked for by itself reports in, and holds nothing afterwards', mhc_requests() > 0 && '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
+// Somebody who pressed "report in now" waits a little for a run that is
+// in the middle of it, and is told if it did not finish.
+$mhc_other->query( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) );
+$mhc_ran   = 0;
+$mhc_work  = static function () use ( &$mhc_ran ) {
+	++$mhc_ran;
+};
+$mhc_began = microtime( true );
+$mhc_done  = Mailhouse_Central::alone( $mhc_work, 1 );
+$mhc_took  = microtime( true ) - $mhc_began;
+check( 'work asked for by hand waits for a run that is at it, and is not done if that does not finish', false === $mhc_done && 0 === $mhc_ran && $mhc_took >= 0.9 && $mhc_took < 5, wp_json_encode( array( $mhc_done, $mhc_ran, $mhc_took ) ) );
+$mhc_began = microtime( true );
+check( 'a scheduled run would not have waited at all', false === Mailhouse_Central::alone( $mhc_work ) && 0 === $mhc_ran && microtime( true ) - $mhc_began < 0.5 );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+check( 'and is done, once, when nobody else is at it', true === Mailhouse_Central::alone( $mhc_work, 1 ) && 1 === $mhc_ran );
+check( 'holding nothing afterwards', '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
+// Work that fails lets go all the same.
+try {
+	Mailhouse_Central::alone(
+		static function () {
+			throw new RuntimeException( 'in the middle of it' );
+		}
+	);
+} catch ( RuntimeException $mhc_thrown ) {
+	unset( $mhc_thrown );
+}
+check( 'work that fails in the middle leaves no lock behind', '1' === (string) $mhc_other->get_var( $mhc_other->prepare( 'SELECT GET_LOCK( %s, 0 )', $mhc_lock ) ) );
+$mhc_other->query( $mhc_other->prepare( 'SELECT RELEASE_LOCK( %s )', $mhc_lock ) );
+
+// The connection is taken away by another request while this one is at work.
+// phpcs:ignore WordPress.DB
+$wpdb->delete( $wpdb->options, array( 'option_name' => Mailhouse_Central_Identity::OPTION ) );
+Mailhouse_Central_Identity::update( array( 'last_tick_at' => time() ) );
+check( 'a connection another request has removed is not put back by one that was at work', null === $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", Mailhouse_Central_Identity::OPTION ) ) && '' === Mailhouse_Central_Identity::status() ); // phpcs:ignore WordPress.DB
+wp_cache_delete( 'alloptions', 'options' );
+$mhc_other->close();
+
+// A site that is not connected spends nothing on any of this.
+mhc_forget();
+$mhc_queries = $wpdb->num_queries;
+Mailhouse_Central::begin();
+Mailhouse_Central::end();
+check( 'a site that is not connected asks its database for no lock', $mhc_queries === $wpdb->num_queries && false === Mailhouse_Central::elsewhere() );
+
 mailhouse_test_results();
