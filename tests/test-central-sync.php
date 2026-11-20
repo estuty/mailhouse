@@ -1237,6 +1237,58 @@ $leak = array_filter(
 check( 'and no subscriber’s key is in it anywhere', count( $keys ) > 10 && ! $leak );
 
 // ---------------------------------------------------------------------------
+echo "\nA clock that is wrong\n";
+
+// What happened here is told to the centre in the centre's time: it decides
+// some things by which came first, a change here or a decision there.
+$mhs_stored = static function ( $mark ) use ( $wpdb ) {
+	$table = Mailhouse_Central_Outbox::table();
+	$times = array();
+
+	// phpcs:ignore WordPress.DB
+	foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT id, occurred_at FROM {$table} WHERE id > %d ORDER BY id ASC", $mark ) ) as $row ) {
+		$times[ (int) $row->id + (int) Mailhouse_Central_Identity::get( 'seq_offset' ) ] = strtotime( $row->occurred_at . ' UTC' );
+	}
+
+	return $times;
+};
+$mhs_told   = static function ( array $stored ) {
+	$apart = array();
+
+	foreach ( $stored as $seq => $then ) {
+		$apart[] = isset( MHS_Centre::$events[ $seq ] ) ? strtotime( MHS_Centre::$events[ $seq ]['occurred_at'] ) - $then : 'not sent';
+	}
+
+	return array_values( array_unique( $apart ) );
+};
+
+foreach ( array( 600, -7200, 0 ) as $mhs_slow ) {
+	// This server's clock is that many seconds behind the centre's, and
+	// the centre's answers have said so.
+	Mailhouse_Central_Identity::update( array( 'clock_offset' => $mhs_slow ) );
+	$mark   = mhs_mark();
+	$person = mhs_subscriber( 'subscribed', array( 'first_name' => 'Tempus' ) );
+	Mailhouse_Subscribers::unsubscribe( Mailhouse_Subscribers::get( (int) $person->id ), 'link' );
+	$stored = $mhs_stored( $mark );
+	$kept   = Mailhouse_Subscribers::get( (int) $person->id );
+	MHS_Centre::calm();
+	mhs_due();
+	Mailhouse_Central_Sync::push();
+
+	check( 'a clock ' . $mhs_slow . ' seconds from the centre’s: every change is told that much later', count( $stored ) >= 2 && array( $mhs_slow ) === $mhs_told( $stored ), wp_json_encode( $mhs_told( $stored ) ) );
+	check( 'and in the form every time takes', array() === MHS_Centre::$invalid, implode( ' | ', array_unique( MHS_Centre::$invalid ) ) );
+
+	$state = MHS_Centre::$events[ max( array_keys( $stored ) ) ]['state'];
+	check( 'the subscriber’s own dates are told as this site holds them, and the hash is of what is told', Mailhouse_Central_Protocol::timestamp( (string) $kept->unsubscribed_at ) === $state['unsubscribed_at'] && Mailhouse_Central_Protocol::timestamp( (string) $kept->created_at ) === $state['created_at'] && Mailhouse_Central_Protocol::state_hash( $state ) === $state['hash'] );
+}
+
+Mailhouse_Central_Identity::update( array( 'clock_offset' => 600 ) );
+check( 'a date that is not a date is left for the centre to refuse', '0000-00-00 00:00:00' === Mailhouse_Central_Sync::in_centre_time( '0000-00-00 00:00:00' ) && 'not a date' === Mailhouse_Central_Sync::in_centre_time( 'not a date' ) );
+check( 'and one that is, is moved by exactly the difference', '2026-11-20 00:05:00' === Mailhouse_Central_Sync::in_centre_time( '2026-11-19 23:55:00' ) );
+Mailhouse_Central_Identity::update( array( 'clock_offset' => 0 ) );
+check( 'a clock that is right changes nothing', '2026-11-19 23:55:00' === Mailhouse_Central_Sync::in_centre_time( '2026-11-19 23:55:00' ) );
+
+// ---------------------------------------------------------------------------
 echo "\nThe centre is down\n";
 
 MHS_Centre::calm();

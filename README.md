@@ -115,6 +115,12 @@ you.
   fields, status, dates, source, sign-up IP address and tags; never their
   `manage_key` or `confirm_key`, their WordPress user id, or anything about
   how the site sends mail.
+- When a change is sent, the time it happened is given in the centre's
+  time. The centre decides some things by which came first, a change here
+  or a decision there, and this server's clock may be wrong; how far it is
+  from the centre's is known from the centre's answers, and is what
+  requests are already signed with. Nothing stored on this site is
+  changed, and a subscriber's own dates are sent as this site holds them.
 - One scheduled run at a time talks to the centre. WordPress does not
   always stop two from running together (its own guard lapses after a
   minute, and a server's cron and a visitor can each start one); a run
@@ -319,7 +325,7 @@ mocks.
 | `tests/test-updates.php` — 65 assertions | pass |
 | `tests/test-foundations.php` — 159 assertions | pass |
 | `tests/test-central.php` — 169 assertions | pass |
-| `tests/test-central-sync.php` — 145 assertions | pass |
+| `tests/test-central-sync.php` — 157 assertions | pass |
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
 | `tests/test-central-campaigns.php` — 345 assertions | pass |

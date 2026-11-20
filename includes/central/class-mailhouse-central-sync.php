@@ -415,6 +415,40 @@ class Mailhouse_Central_Sync {
 	}
 
 	/**
+	 * A time by this server's clock, as the centre's clock had it.
+	 *
+	 * The centre decides some things by which of two happened first: what
+	 * somebody did on this site, or what was decided about them there.
+	 * This server's clock may be wrong, and how wrong is known: every
+	 * report to the centre is answered with the time there, and the
+	 * difference is kept (it is what requests are signed with). So when a
+	 * change is told to the centre, it is told in the centre's time.
+	 *
+	 * What is stored here is not changed: the outbox, and the subscriber's
+	 * own dates, stay by this server's clock.
+	 *
+	 * @param string $datetime `Y-m-d H:i:s`, UTC, by this server's clock.
+	 * @return string The same moment by the centre's clock, in the same form.
+	 */
+	public static function in_centre_time( $datetime ) {
+		$datetime = (string) $datetime;
+		$offset   = (int) Mailhouse_Central_Identity::get( 'clock_offset' );
+
+		if ( 0 === $offset ) {
+			return $datetime;
+		}
+
+		$then = strtotime( $datetime . ' UTC' );
+
+		// A date that is not one is sent as it is, and refused as it was.
+		if ( false === $then || $then <= 0 ) {
+			return $datetime;
+		}
+
+		return gmdate( 'Y-m-d H:i:s', $then + $offset );
+	}
+
+	/**
 	 * One outbox row as the JSON of an event.
 	 *
 	 * The data and the state were encoded when the change happened and are
@@ -430,7 +464,7 @@ class Mailhouse_Central_Sync {
 				'seq'         => (int) $row->id + $offset,
 				'event_id'    => (string) $row->event_id,
 				'type'        => (string) $row->type,
-				'occurred_at' => Mailhouse_Central_Protocol::timestamp( (string) $row->occurred_at, true ),
+				'occurred_at' => Mailhouse_Central_Protocol::timestamp( self::in_centre_time( (string) $row->occurred_at ), true ),
 				'origin'      => (string) $row->origin,
 				'subject'     => array(
 					'type'     => (string) $row->subject_type,
