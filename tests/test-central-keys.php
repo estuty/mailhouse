@@ -17,6 +17,16 @@ $saved_central  = get_option( 'mailhouse_central', null );
 
 register_shutdown_function(
 	static function () use ( $saved_settings, $saved_central ) {
+		global $wpdb;
+
+		// The commands this suite had the site collect: on a rig site, the
+		// centre's own check later counts every command the site answered.
+		$ids = class_exists( 'MHY_Centre' ) ? MHY_Centre::$issued : array();
+		if ( array() !== $ids ) {
+			// phpcs:ignore WordPress.DB
+			$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . Mailhouse_Central_Commands::table() . ' WHERE command_id IN (' . implode( ',', array_fill( 0, count( $ids ), '%s' ) ) . ')', $ids ) );
+		}
+
 		update_option( 'mailhouse_settings', $saved_settings );
 
 		if ( null === $saved_central ) {
@@ -52,6 +62,9 @@ final class MHY_Centre {
 
 	/** @var array[] Commands waiting, by id. */
 	public static $commands = array();
+
+	/** @var string[] Every command id issued, kept across resets, so that they can be taken out of the site's inbox at the end. */
+	public static $issued = array();
 
 	/** @var array[] Answers to commands, with the key that signed each answer. */
 	public static $answers = array();
@@ -146,6 +159,7 @@ final class MHY_Centre {
 
 		$envelope['signature']             = base64_encode( sodium_crypto_sign_detached( $message, self::key( $key_id ) ) ); // phpcs:ignore
 		self::$commands[ $envelope['id'] ] = $envelope;
+		self::$issued[]                    = $envelope['id'];
 
 		return $envelope;
 	}
