@@ -197,6 +197,129 @@ class Mailhouse_Central_Protocol {
 	}
 
 	/**
+	 * The string the centre signs for the set of platform keys it announces.
+	 *
+	 * The scheme, the moment it was made, and a line for each key in
+	 * key-id order: "id status public-key".
+	 *
+	 * @param array  $keys      Keys: list of array( key_id, public_key, status ).
+	 * @param string $issued_at When the set was made, exactly as sent.
+	 * @return string
+	 */
+	public static function key_set_message( array $keys, $issued_at ) {
+		usort(
+			$keys,
+			static function ( $a, $b ) {
+				return strcmp( (string) $a['key_id'], (string) $b['key_id'] );
+			}
+		);
+
+		$lines = array( 'MH1-KEYS', (string) $issued_at );
+
+		foreach ( $keys as $key ) {
+			$lines[] = $key['key_id'] . ' ' . $key['status'] . ' ' . $key['public_key'];
+		}
+
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * The keys of a set of platform keys the centre announced, if a key this
+	 * site already trusts signed it; otherwise null.
+	 *
+	 * A new platform key reaches a site this way, introduced by the key
+	 * before it. Nothing about the set is taken on trust: every key is
+	 * checked for shape, at least one must be in use, and one signature must
+	 * be by a trusted key over exactly this set.
+	 *
+	 * @param mixed $announcement The set, as decoded from JSON.
+	 * @param array $trusted      The keys this site trusts.
+	 * @return array|null
+	 */
+	public static function read_key_set( $announcement, array $trusted ) {
+		if ( ! is_array( $announcement ) || ! self::available() || ! isset( $announcement['keys'], $announcement['issued_at'], $announcement['signatures'] ) ) {
+			return null;
+		}
+
+		if ( ! is_array( $announcement['keys'] ) || ! is_array( $announcement['signatures'] ) || ! is_string( $announcement['issued_at'] ) ) {
+			return null;
+		}
+
+		if ( count( $announcement['keys'] ) < 1 || count( $announcement['keys'] ) > 8 || count( $announcement['signatures'] ) > 8 ) {
+			return null;
+		}
+
+		$keys   = array();
+		$active = false;
+
+		foreach ( $announcement['keys'] as $key ) {
+			if ( ! is_array( $key ) || ! isset( $key['key_id'], $key['public_key'], $key['status'] ) || ! is_string( $key['key_id'] ) || ! is_string( $key['status'] ) ) {
+				return null;
+			}
+
+			if ( ! preg_match( '/^[A-Za-z0-9_-]{1,64}$/', $key['key_id'] ) || null === self::decode( $key['public_key'], SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES ) || ! in_array( $key['status'], array( 'active', 'next' ), true ) ) {
+				return null;
+			}
+
+			$active = $active || 'active' === $key['status'];
+			$keys[] = array(
+				'key_id'     => $key['key_id'],
+				'public_key' => $key['public_key'],
+				'status'     => $key['status'],
+			);
+		}
+
+		if ( ! $active ) {
+			return null;
+		}
+
+		$message = self::key_set_message( $keys, $announcement['issued_at'] );
+
+		foreach ( $announcement['signatures'] as $signature ) {
+			if ( ! is_array( $signature ) || ! isset( $signature['key_id'], $signature['signature'] ) || ! is_string( $signature['key_id'] ) ) {
+				continue;
+			}
+
+			foreach ( $trusted as $key ) {
+				if ( ! is_array( $key ) || ! isset( $key['key_id'], $key['public_key'] ) || ! hash_equals( (string) $key['key_id'], $signature['key_id'] ) ) {
+					continue;
+				}
+
+				$public = self::decode( $key['public_key'], SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES );
+				$bytes  = self::decode( $signature['signature'], SODIUM_CRYPTO_SIGN_BYTES );
+
+				if ( null === $public || null === $bytes ) {
+					continue;
+				}
+
+				try {
+					if ( sodium_crypto_sign_verify_detached( $bytes, $message, $public ) ) {
+						return $keys;
+					}
+				} catch ( Exception $e ) {
+					continue;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The string this site signs with a new key it asks the centre to
+	 * register, to show it holds that key.
+	 *
+	 * @param string $website_id     This website's id at the centre.
+	 * @param string $old_key_id     The key in use, which signs the request.
+	 * @param string $new_key_id     The new key's id.
+	 * @param string $new_public_key The new public key, base64, exactly as sent.
+	 * @return string
+	 */
+	public static function rotation_message( $website_id, $old_key_id, $new_key_id, $new_public_key ) {
+		return implode( "\n", array( 'MH1-ROT', (string) $website_id, (string) $old_key_id, (string) $new_key_id, (string) $new_public_key ) );
+	}
+
+	/**
 	 * Strict base64: the one canonical spelling of exactly this many bytes.
 	 *
 	 * @param mixed $text  Text to decode.

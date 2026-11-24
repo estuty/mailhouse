@@ -35,6 +35,18 @@ class Mailhouse_Central_Identity {
 	const KEY_SETTING = 'central_private_key';
 
 	/**
+	 * Setting holding a new private key while it is being registered (10.5).
+	 * Kept until the centre has taken it, so that a change interrupted half
+	 * way is finished with the same key, not a third one.
+	 */
+	const NEXT_KEY_SETTING = 'central_private_key_next';
+
+	/**
+	 * How old this site's key may grow before the site changes it by itself.
+	 */
+	const KEY_LIFETIME = YEAR_IN_SECONDS;
+
+	/**
 	 * Setting saying whether there is a connection at all.
 	 */
 	const FLAG_SETTING = 'central_connected';
@@ -125,6 +137,12 @@ class Mailhouse_Central_Identity {
 			'template_checked_at'   => 0,
 			'template_next_at'      => 0,
 			'template_error'        => '',
+			// Keys (10.5). When the centre made the set of platform keys this
+			// site last took, as it wrote it; when this site's own key was
+			// made; and what went wrong the last time it tried to change it.
+			'platform_keys_at'      => '',
+			'key_since'             => 0,
+			'key_error'             => '',
 		);
 	}
 
@@ -438,7 +456,14 @@ class Mailhouse_Central_Identity {
 		}
 
 		if ( ! Mailhouse_Settings::is_constant( self::KEY_SETTING ) ) {
-			Mailhouse_Settings::set( array( self::KEY_SETTING => $key['secret'] ) );
+			// A key half way to being registered belonged to the connection
+			// this one replaces.
+			Mailhouse_Settings::set(
+				array(
+					self::KEY_SETTING      => $key['secret'],
+					self::NEXT_KEY_SETTING => '',
+				)
+			);
 		}
 
 		self::$state = null;
@@ -455,6 +480,7 @@ class Mailhouse_Central_Identity {
 					'platform_keys'  => $accepted['platform_keys'],
 					'protocol'       => $accepted['protocol'],
 					'registered_at'  => time(),
+					'key_since'      => time(),
 					'clock_offset'   => Mailhouse_Central_Client::offset_from( $answer['body'] ),
 				),
 				Mailhouse_Central_Sync::begin( $accepted['last_seq_received'], $accepted['epoch'] ),
@@ -520,6 +546,147 @@ class Mailhouse_Central_Identity {
 			'protocol'          => (int) $body['protocol'],
 			'epoch'             => isset( $sync['epoch'] ) ? max( 1, (int) $sync['epoch'] ) : 1,
 			'last_seq_received' => isset( $sync['last_seq_received'] ) ? max( 0, (int) $sync['last_seq_received'] ) : 0,
+		);
+	}
+
+	/**
+	 * Take the set of platform keys the centre announced in its answer to a
+	 * report, if it is signed by a key this site trusts and is newer than
+	 * the last set taken (10.5).
+	 *
+	 * This is the one way, short of registering again, that what this site
+	 * trusts changes: a new key is introduced by one already trusted, and a
+	 * key the centre has stopped announcing is no longer trusted. An older
+	 * set, replayed, changes nothing.
+	 *
+	 * @param mixed $announcement The set, as decoded from JSON.
+	 * @return bool Whether it was taken.
+	 */
+	public static function adopt_platform_keys( $announcement ) {
+		$state = self::state();
+		$keys  = Mailhouse_Central_Protocol::read_key_set( $announcement, (array) $state['platform_keys'] );
+
+		if ( null === $keys ) {
+			return false;
+		}
+
+		// Written as the centre writes every such moment, to the millisecond,
+		// so that the later of two is the greater as text.
+		$at = (string) $announcement['issued_at'];
+
+		if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/', $at ) || strcmp( $at, (string) $state['platform_keys_at'] ) <= 0 ) {
+			return false;
+		}
+
+		self::update(
+			array(
+				'platform_keys'    => $keys,
+				'platform_keys_at' => $at,
+			)
+		);
+
+		return true;
+	}
+
+	/**
+	 * Whether this site's key is old enough to change by itself.
+	 *
+	 * @return bool
+	 */
+	public static function key_due() {
+		$state = self::state();
+		$since = (int) $state['key_since'] ? (int) $state['key_since'] : (int) $state['registered_at'];
+
+		return 'connected' === $state['status'] && $since > 0 && time() - $since >= self::KEY_LIFETIME
+			&& ! Mailhouse_Settings::is_constant( self::KEY_SETTING );
+	}
+
+	/**
+	 * Change this site's key (10.5): make a new pair and have the centre
+	 * register it, in a request signed with the key in use and carrying a
+	 * proof made with the new one. Only once the centre has said yes does
+	 * this site sign with the new key; the old one is accepted for a day
+	 * more, so nothing in between is refused.
+	 *
+	 * The new key is kept until the centre has taken it. A change that was
+	 * interrupted, or whose answer was lost, is finished with the same key:
+	 * the centre answers the same request the same way.
+	 *
+	 * @return array|WP_Error array( key_id, old_key_valid_until ) on success.
+	 */
+	public static function rotate_key() {
+		if ( Mailhouse_Settings::is_constant( self::KEY_SETTING ) ) {
+			return new WP_Error( 'mailhouse_central_key_fixed', __( 'This site’s key is set in wp-config.php (MAILHOUSE_CENTRAL_PRIVATE_KEY). Change it there, and connect the site again.', 'mailhouse' ) );
+		}
+
+		$state = self::state();
+
+		if ( 'connected' !== $state['status'] ) {
+			return new WP_Error( 'mailhouse_central_not_connected', __( 'This site is not connected, so it has no key to change.', 'mailhouse' ) );
+		}
+
+		$pending = Mailhouse_Central_Protocol::decode( (string) Mailhouse_Settings::get( self::NEXT_KEY_SETTING, '' ), SODIUM_CRYPTO_SIGN_SECRETKEYBYTES );
+
+		if ( null === $pending ) {
+			$key = Mailhouse_Central_Protocol::generate_keypair();
+			Mailhouse_Settings::set( array( self::NEXT_KEY_SETTING => $key['secret'] ) );
+		} else {
+			$key = Mailhouse_Central_Protocol::describe_key( $pending );
+		}
+
+		$answer = Mailhouse_Central_Client::signed(
+			'POST',
+			'/api/v1/connector/keys/rotate',
+			array(
+				'new_key_id'     => $key['key_id'],
+				'new_public_key' => $key['public'],
+				'proof'          => Mailhouse_Central_Protocol::sign(
+					Mailhouse_Central_Protocol::rotation_message( $state['website_id'], $state['key_id'], $key['key_id'], $key['public'] ),
+					$key['secret']
+				),
+			)
+		);
+
+		if ( is_wp_error( $answer ) ) {
+			self::update( array( 'key_error' => substr( $answer->get_error_message(), 0, 500 ) ) );
+
+			return $answer;
+		}
+
+		$body = is_array( $answer['body'] ) ? $answer['body'] : array();
+
+		if ( 200 !== $answer['status'] || ! isset( $body['key_id'] ) || $key['key_id'] !== $body['key_id'] ) {
+			if ( 409 === $answer['status'] ) {
+				// The centre will not take this key. A fresh one is made for
+				// the next attempt.
+				Mailhouse_Settings::set( array( self::NEXT_KEY_SETTING => '' ) );
+			}
+
+			/* translators: %d: HTTP status. */
+			$message = sprintf( __( 'The centre did not take this site’s new key (status %d).', 'mailhouse' ), (int) $answer['status'] );
+			self::update( array( 'key_error' => $message ) );
+
+			return new WP_Error( 'mailhouse_central_key_refused', $message );
+		}
+
+		Mailhouse_Settings::set(
+			array(
+				self::KEY_SETTING      => $key['secret'],
+				self::NEXT_KEY_SETTING => '',
+			)
+		);
+		self::update(
+			array(
+				'key_id'     => $key['key_id'],
+				'public_key' => $key['public'],
+				'key_since'  => time(),
+				'key_error'  => '',
+			)
+		);
+
+		return array(
+			'key_id'              => $key['key_id'],
+			'old_key_valid_until' => isset( $body['old_key_valid_until'] ) && is_string( $body['old_key_valid_until'] ) ? substr( $body['old_key_valid_until'], 0, 40 ) : '',
 		);
 	}
 
@@ -629,10 +796,14 @@ class Mailhouse_Central_Identity {
 
 		Mailhouse_Settings::set(
 			Mailhouse_Settings::is_constant( self::KEY_SETTING )
-				? array( self::FLAG_SETTING => false )
+				? array(
+					self::FLAG_SETTING     => false,
+					self::NEXT_KEY_SETTING => '',
+				)
 				: array(
-					self::FLAG_SETTING => false,
-					self::KEY_SETTING  => '',
+					self::FLAG_SETTING     => false,
+					self::KEY_SETTING      => '',
+					self::NEXT_KEY_SETTING => '',
 				)
 		);
 

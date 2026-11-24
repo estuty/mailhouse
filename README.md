@@ -105,6 +105,14 @@ you.
 - A connected site makes its own key pair. The private half is encrypted in
   the database and never leaves the site, or can be supplied as
   `MAILHOUSE_CENTRAL_PRIVATE_KEY` in `wp-config.php`.
+- It changes that key once a year, and when the centre's owner asks: it
+  makes a new pair and has the centre register it, in a request signed with
+  the key it uses now. The old key is accepted for a day more, so nothing
+  stops. A key supplied in `wp-config.php` is never changed by the site.
+- It takes the centre's word only for commands signed by a key it trusts. It
+  is given the centre's keys when it connects; a new one reaches it later
+  only signed by a key it already trusts, so whoever could merely sit
+  between the two cannot introduce a key of their own.
 - It reports in once a minute: versions, counts, and which mail transport
   is in use. Never a host name or a credential.
 - What changes on the list — a sign-up, a confirmation, an unsubscribe, a
@@ -315,7 +323,7 @@ mocks.
 
 | Check | Result |
 |---|---|
-| PHP lint, 78 files, tests included | pass |
+| PHP lint, 79 files, tests included | pass |
 | `tests/test-core.php` — 85 assertions | pass |
 | `tests/test-admin.php` — 31 assertions | pass |
 | `tests/test-import.php` — 40 assertions | pass |
@@ -329,6 +337,7 @@ mocks.
 | `tests/test-central-reconcile.php` — 65 assertions | pass |
 | `tests/test-central-commands.php` — 138 assertions, one of them over 4,000 random steps | pass |
 | `tests/test-central-campaigns.php` — 345 assertions | pass |
+| `tests/test-central-keys.php` — 33 assertions | pass |
 | Two processes claiming from one queue, 50 rounds of 500 rows | no row claimed twice, none missed |
 | A real update installed from a published release | same folder, stays active |
 | The release zip built by CI, rebuilt from its tag | byte-identical on Windows and Ubuntu |

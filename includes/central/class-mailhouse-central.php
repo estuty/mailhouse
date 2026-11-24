@@ -348,6 +348,11 @@ class Mailhouse_Central {
 				// somebody the centre has just unsubscribed is not sent the next message.
 				if ( true === Mailhouse_Central::heartbeat( Mailhouse_Central::TICK_TIMEOUT ) ) {
 					Mailhouse_Central_Commands::work();
+
+					// A key a year old is changed without anybody asking (10.5).
+					if ( Mailhouse_Central_Identity::key_due() ) {
+						Mailhouse_Central_Identity::rotate_key();
+					}
 				}
 			}
 		);
@@ -412,6 +417,12 @@ class Mailhouse_Central {
 				// sequence has to start again.
 				if ( isset( $body['epoch'] ) ) {
 					Mailhouse_Central_Sync::new_epoch( (int) $body['epoch'] );
+				}
+
+				// The keys the centre may sign commands with, signed by a key
+				// this site already trusts: how a new one arrives (10.5).
+				if ( isset( $body['platform_keys'] ) ) {
+					Mailhouse_Central_Identity::adopt_platform_keys( $body['platform_keys'] );
 				}
 
 				// A centre that has just begun to take what a provider said

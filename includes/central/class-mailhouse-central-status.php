@@ -45,6 +45,9 @@ class Mailhouse_Central_Status {
 			// And only a site that sends for the centre has anything to
 			// say about what became of a message.
 			$capabilities[] = Mailhouse_Central_Delivery::CAPABILITY;
+			// Asked to change its key by a command, so only by a site
+			// that takes commands.
+			$capabilities[] = Mailhouse_Central_Commands::KEYS_CAPABILITY;
 		}
 
 		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', $capabilities ), 'is_string' ) );
@@ -92,6 +95,9 @@ class Mailhouse_Central_Status {
 			'outbox'         => Mailhouse_Central_Sync::report(),
 			'sync'           => Mailhouse_Central_Reconcile::report(),
 			'inbox'          => Mailhouse_Central_Commands::report(),
+			// The platform keys this site trusts, by id: how the centre knows
+			// a new one has reached it (10.5).
+			'platform_keys'  => array_values( array_filter( array_map( 'strval', wp_list_pluck( (array) $state['platform_keys'], 'key_id' ) ) ) ),
 			'queue'          => self::queue(),
 			'subscribers'    => array(
 				'subscribed'   => (int) $subscribers['subscribed'],

@@ -50,6 +50,8 @@ class Mailhouse_Settings {
 		'webhook_resend_secret',
 		// This site's signing key for Mailhouse Central. Never on a form.
 		'central_private_key',
+		// Its next one, while the centre is being asked to register it.
+		'central_private_key_next',
 	);
 
 	/**
@@ -175,6 +177,7 @@ class Mailhouse_Settings {
 			// is not connected never looks for the connection's own option.
 			'central_connected'   => false,
 			'central_private_key' => '',
+			'central_private_key_next' => '',
 
 			// Housekeeping.
 			'delete_data'         => false,

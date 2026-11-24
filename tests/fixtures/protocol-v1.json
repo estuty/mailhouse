@@ -1347,5 +1347,68 @@
       "key_id": "p-test",
       "signature": "UdRCzyvj5UasEzBMDfYjPP8RivLri5n2nmBnL6hJlZwc0YRHF9NbixJ+CnArNtdzRTKRrG/ArqQp9rvBnrbcAA=="
     }
+  ],
+  "key_sets": [
+    {
+      "name": "a next key announced, signed by the key in use and by itself",
+      "keys": [
+        {
+          "key_id": "p-test",
+          "public_key": "S3G6x2reu0CRLY+/WQ9/mKjghSJg6g3rDqvI4hM730A=",
+          "status": "active"
+        },
+        {
+          "key_id": "p-next",
+          "public_key": "cnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=",
+          "status": "next"
+        }
+      ],
+      "issued_at": "2026-11-25T09:00:00.000Z",
+      "message": "MH1-KEYS\n2026-11-25T09:00:00.000Z\np-next next cnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=\np-test active S3G6x2reu0CRLY+/WQ9/mKjghSJg6g3rDqvI4hM730A=",
+      "signatures": [
+        {
+          "key_id": "p-test",
+          "signature": "8MCESZEmQu65WyVs9OF+B0hfxYPsTzpSQ9SzWLg/ZaQN1sqWpCSZVkEVv3/BECvtKV7nKRW5lAUuJ/78AageCg=="
+        },
+        {
+          "key_id": "p-next",
+          "signature": "zIVycU8p9HznlM+0los4GIXoShFM853eUbIQBjwV8+MJUSt65p9vO4HJ97aLZx2V3lsita6RdATtzod7yWYyDA=="
+        }
+      ]
+    },
+    {
+      "name": "after the switch: keys listed out of order are signed in key-id order",
+      "keys": [
+        {
+          "key_id": "p-zulu",
+          "public_key": "cnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=",
+          "status": "active"
+        },
+        {
+          "key_id": "p-alpha",
+          "public_key": "S3G6x2reu0CRLY+/WQ9/mKjghSJg6g3rDqvI4hM730A=",
+          "status": "active"
+        }
+      ],
+      "issued_at": "2026-11-26T09:00:00.000Z",
+      "message": "MH1-KEYS\n2026-11-26T09:00:00.000Z\np-alpha active S3G6x2reu0CRLY+/WQ9/mKjghSJg6g3rDqvI4hM730A=\np-zulu active cnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=",
+      "signatures": [
+        {
+          "key_id": "p-zulu",
+          "signature": "fnyCnr4HDK3t3iDCxJG4grOUyPgMiecXjkZ0+QfZ/2i9VkPOkIq/V1Bsd6lLvnHfhqE+1iAcMpiu3MkVddK8DQ=="
+        }
+      ]
+    }
+  ],
+  "rotations": [
+    {
+      "name": "a site changes its key",
+      "website_id": "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      "old_key_id": "k1",
+      "new_key_id": "k-0123456789abcdef",
+      "new_public_key": "cnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=",
+      "message": "MH1-ROT\n0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b\nk1\nk-0123456789abcdef\ncnGpABT025f9Djsj3vZOAD9/seiAIKv6U4oHJSaLGiM=",
+      "proof": "LNy41EIxbXxyQ6RwNuYm6nPTA9g++XEicroXC/nj4b3S31vbQQBNsRZjcYixN+dMdmMdfHBZ7Ozl2erDhhhbDw=="
+    }
   ]
 }

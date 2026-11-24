@@ -43,6 +43,11 @@ class Mailhouse_Central_Commands {
 	const CAPABILITY = 'subscribers.commands.v1';
 
 	/**
+	 * What this site announces when it can change its own key (10.5).
+	 */
+	const KEYS_CAPABILITY = 'keys.rotate.v1';
+
+	/**
 	 * Commands asked for at a time.
 	 */
 	const BATCH = 20;
@@ -89,6 +94,7 @@ class Mailhouse_Central_Commands {
 		'tag.rename',
 		'tag.delete',
 		'site.reconcile',
+		'site.rotate_key',
 		'campaign.prepare',
 		'campaign.pause',
 		'campaign.resume',
@@ -382,7 +388,7 @@ class Mailhouse_Central_Commands {
 	protected static function changes( $type ) {
 		// Nothing about a campaign changes a subscriber: what becomes of
 		// one is reported in its own way, not as news of the list.
-		return 0 !== strpos( $type, 'campaign.' ) && ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile' ), true );
+		return 0 !== strpos( $type, 'campaign.' ) && ! in_array( $type, array( 'subscriber.reconfirm', 'site.reconcile', 'site.rotate_key' ), true );
 	}
 
 	/**
@@ -435,6 +441,8 @@ class Mailhouse_Central_Commands {
 				return self::tag_delete( $payload );
 			case 'site.reconcile':
 				return self::reconcile();
+			case 'site.rotate_key':
+				return self::rotate_key();
 			case 'campaign.prepare':
 				return Mailhouse_Central_Campaigns::prepare( $payload );
 			case 'campaign.pause':
@@ -1125,5 +1133,24 @@ class Mailhouse_Central_Commands {
 		Mailhouse_Central_Identity::update( array( 'want_reconcile' => true ) );
 
 		return array( 'applied', array() );
+	}
+
+	/**
+	 * Change this site's key, now (10.5). The new key is registered with the
+	 * centre in a request signed by the one in use; this command's answer is
+	 * then signed with the new one.
+	 *
+	 * @return array
+	 */
+	protected static function rotate_key() {
+		$done = Mailhouse_Central_Identity::rotate_key();
+
+		if ( is_wp_error( $done ) ) {
+			return 'mailhouse_central_key_fixed' === $done->get_error_code()
+				? self::refuse( 'key_fixed_in_config' )
+				: array( 'failed', array( 'reason' => 'not_registered' ) );
+		}
+
+		return array( 'applied', $done );
 	}
 }
