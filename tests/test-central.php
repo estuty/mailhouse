@@ -617,7 +617,9 @@ for ( $i = 0; $i < 7; $i++ ) {
 mhc_requests();
 
 check( 'each failure is recorded, with the reason', 7 === (int) Mailhouse_Central_Identity::get( 'failures' ) && '' !== Mailhouse_Central_Identity::get( 'last_error' ) );
-check( 'it waits longer each time: one minute, two, four, eight, then fifteen', array( 60, 120, 240, 480, 900, 900, 900 ) === $waits, implode( ',', $waits ) );
+// The tick reads the clock after $before did: a second may have begun in between.
+$late = array_map( static fn( $wait, $expected ) => $wait - $expected, $waits, array( 60, 120, 240, 480, 900, 900, 900 ) );
+check( 'it waits longer each time: one minute, two, four, eight, then fifteen', 7 === count( $waits ) && array() === array_diff( $late, array( 0, 1 ) ), implode( ',', $waits ) );
 check( 'the site is still connected, as far as it knows', 'connected' === Mailhouse_Central_Identity::status() );
 
 Mailhouse_Central::tick();
