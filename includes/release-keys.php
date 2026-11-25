@@ -19,5 +19,7 @@
 defined( 'ABSPATH' ) || exit;
 
 return array(
+	'84Y+K5Rg1agqt1rkijWUUPi6jgZHYNC6CBCGfYy4Zv0=', // r-7558199df8302f6a, added 2026-11-25
+	'CWXU6zXbcKriPqddR/kAfWmvlgEwX+MdckGnFJD6UzA=', // r-e4d1353af12245fd, added 2026-11-25
 	// Keys go above this line.
 );
