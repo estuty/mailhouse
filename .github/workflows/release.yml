@@ -15,6 +15,16 @@ name: Release zip
 #                      is already there it is verified rather than replaced.
 #   manual             re-run for any existing tag; `force` re-uploads.
 #
+# Signed releases (since 10.6). Sites install nothing that is not signed by a
+# key pinned in the version they run (includes/release-keys.php), and that key
+# is never given to GitHub: this workflow builds and checks, a person signs.
+# The tag is signed from the signer's own checkout with tools/release.php,
+# which compares the zip attached here with what the tag builds there, and the
+# signature is attached beside the zip as mailhouse-<version>.zip.sig before
+# the draft is published. Publishing fires this workflow again, and it fails
+# loudly if the signature is missing or does not hold, because no site will
+# be offered the release until it does.
+#
 # The tag being built is checked out under src/, separately from this
 # repository's own checkout, so the workflow and its helpers are always the
 # ones from the ref that started it. Otherwise it could only ever build tags
@@ -142,6 +152,23 @@ jobs:
           if [ "$uri" != "$want" ]; then
             echo "::warning::Update URI is $uri but this is $want -- releases here will not reach installs of this build"
           fi
+
+      - name: Check a release key is pinned
+        shell: bash
+        run: |
+          set -euo pipefail
+          keys=src/includes/release-keys.php
+
+          # A version from before signed updates has no keys to pin, and is
+          # rebuilt as it was.
+          if [ ! -f "$keys" ]; then
+            echo "::notice::no includes/release-keys.php in this tag: a version from before signed updates"
+            exit 0
+          fi
+
+          # A version that pins no key would install no update ever again.
+          php tools/release.php keys --keys "$keys" || {
+            echo "::error::this tag pins no release key, so a site running it could never update again"; exit 1; }
 
       - name: Lint every PHP file
         shell: bash
@@ -272,6 +299,51 @@ jobs:
           fi
           echo "Identical contents ($(wc -l < rebuilt.txt) entries). Nothing to do."
 
+      - name: Check the signature
+        id: signature
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          ZIP: ${{ steps.build.outputs.zip }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f src/includes/release-keys.php ]; then
+            echo "::notice::a version from before signed updates: no signature to check"
+            exit 0
+          fi
+
+          # A draft is where the signature is still to be attached.
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+            echo "UNSIGNED=draft" >> "$GITHUB_ENV"
+            echo "The release is a draft: sign it and attach $ZIP.sig before publishing."
+            exit 0
+          fi
+
+          mkdir -p signed
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ZIP.sig"; then
+            echo "UNSIGNED=published" >> "$GITHUB_ENV"
+            echo "::error::$TAG is published with no $ZIP.sig: no site will be offered it until one is attached"
+            exit 1
+          fi
+          gh release download "$TAG" --pattern "$ZIP" --pattern "$ZIP.sig" --dir signed --clobber
+
+          # The keys of this version, and of the one before it, which is what
+          # the sites asked to install it are running.
+          sets=(--keys src/includes/release-keys.php)
+          prev=$(git -C src describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
+          if [ -n "$prev" ] && git -C src show "$prev:includes/release-keys.php" > previous-keys.php 2>/dev/null; then
+            echo "also with the keys of $prev"
+            sets+=(--keys previous-keys.php)
+          else
+            echo "::notice::the version before (${prev:-none}) pins no keys: sites running it install this unchecked"
+          fi
+
+          php tools/release.php verify "signed/$ZIP" "signed/$ZIP.sig" "${sets[@]}" || {
+            echo "::error::the signature on $TAG does not hold: sites will refuse it"; exit 1; }
+          echo "SIGNED=1" >> "$GITHUB_ENV"
+
       - name: Say what happened
         if: always()
         shell: bash
@@ -286,7 +358,16 @@ jobs:
               echo "- Built \`$ZIP\`"
             fi
             if [ "${DRAFT:-}" = "1" ]; then
-              echo "- Opened a **draft** release. Write the notes and publish it."
+              echo "- Opened a **draft** release. Write the notes, sign it, attach the signature, and publish it."
+            fi
+            if [ "${UNSIGNED:-}" = "draft" ]; then
+              echo "- Not signed yet. From your own checkout, with the release key: \`gh release download $TAG --pattern $ZIP\`, then \`php tools/release.php sign $TAG <secret-file> --zip $ZIP\`, then \`gh release upload $TAG $ZIP.sig\`."
+            fi
+            if [ "${UNSIGNED:-}" = "published" ]; then
+              echo "- **Published without a signature.** No site will be offered it until \`$ZIP.sig\` is attached."
+            fi
+            if [ "${SIGNED:-}" = "1" ]; then
+              echo "- Signed, and the signature holds."
             fi
             echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG"
           } >> "$GITHUB_STEP_SUMMARY"

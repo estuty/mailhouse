@@ -51,6 +51,7 @@ delete_option( 'mailhouse_install_lock' );
 delete_option( 'mailhouse_central' );
 delete_option( 'mailhouse_central_heard' );
 delete_option( 'mailhouse_central_tests' );
+delete_site_option( 'mailhouse_update_refused' );
 
 // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query(

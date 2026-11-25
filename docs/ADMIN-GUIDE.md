@@ -378,6 +378,17 @@ Nothing about the site is sent anywhere. The check reads a public list of
 releases and that is all, and it runs on the twice-daily schedule WordPress
 already uses for every other plugin.
 
+**Only a signed release installs.** Each release is signed by its publisher
+with a key that is kept away from GitHub, and this plugin carries the public
+half. Before WordPress installs an update, Mailhouse fetches the signature,
+downloads and unpacks the zip itself, and compares every file with what was
+signed. If the signature is missing, is by a key this version does not know,
+or the files differ in any way, WordPress is told the update failed, with the
+reason, and nothing on the site changes -- the plugin is not even deactivated.
+A release published without a signature is not offered at all. Uploading a
+zip yourself under **Plugins → Add New → Upload Plugin** is not checked: that
+is your own choice, not an update.
+
 If you would rather not wait for that schedule, the plugin's row on the Plugins
 screen has a **Check for updates** link. **Tools → Status** shows where the
 last check got to, which is the place to look if an update you are expecting
@@ -402,6 +413,7 @@ has not appeared.
 | Two plugins fighting over delivery | The admin warns you by name. Deactivate one. |
 | Somebody stopped receiving the newsletter | Subscribers: are they Bounced? The log says why. |
 | Bounces are not being recorded | Open the endpoint URL in a browser. It should answer `{"ok":true}`; anything else means the key is wrong. |
-| No update is showing for a version you know exists | Tools → Status, the Updates row. It says whether the last check failed. |
+| No update is showing for a version you know exists | Tools → Status, the Updates row. It says whether the last check failed, or whether the release has no signature yet. |
+| "Mailhouse 1.x was not installed: …" | The update was refused because its signature did not hold, and the reason follows. Nothing was changed. Tools → Status keeps the reason until a newer version installs. Do not install that zip by hand; tell whoever publishes the plugin. |
 
 **Tools → Status** has a summary worth copying into any support request.

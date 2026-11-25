@@ -65,6 +65,11 @@ from its releases on GitHub. A new version appears on the Plugins and Updates
 screens with its release notes and installs with one click, and WordPress's
 own plugin auto-update toggle works on it like any other plugin.
 
+Only a signed release installs. Each release is signed with a key kept away
+from GitHub, and the plugin compares every file of the download with what was
+signed before WordPress installs it; anything missing, added, changed or
+unsigned is refused, and the site is left exactly as it was.
+
 Nothing is sent anywhere. The check is a read of the public releases list, no
 site data goes with it, and it runs on WordPress's existing twice-daily
 schedule. The plugin's row has a "Check for updates" link if you would rather

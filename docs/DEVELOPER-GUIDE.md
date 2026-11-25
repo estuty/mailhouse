@@ -590,6 +590,80 @@ Point it elsewhere with `MAILHOUSE_UPDATE_REPO` in `wp-config.php` or the
 `mailhouse_update_repo` filter. The repository has to be public: GitHub answers
 404, not 403, for a private one, so the symptom is simply no updates.
 
+### Signed updates
+
+A site installs no update that is not signed by a key it pins. The point is
+that taking over the GitHub account or repository is no longer enough to ship
+code to every site: the key that signs never goes near GitHub.
+
+**What is signed** is not the zip but what it must unpack to
+(`Mailhouse_Release`): the plugin, the version, and the SHA-256 of every file.
+The signer makes it from their own checkout of the tag, with the same
+`git archive` the workflow uses, so they never have to trust the zip GitHub
+built. It is attached beside the zip as `mailhouse-<version>.zip.sig`:
+
+```json
+{
+  "scheme": "MH1-RELEASE", "plugin": "mailhouse", "version": "1.7.0",
+  "files": { "mailhouse.php": "<sha256>", "includes/…": "<sha256>" },
+  "signatures": [ { "key_id": "r-<16 hex>", "signature": "<base64 Ed25519>" } ]
+}
+```
+
+Each signature is over `MH1-RELEASE`, `mailhouse`, the version, then one line
+per file, `<sha256> <path>` in byte order of path, joined by newlines. A key's
+id is `r-` and the first sixteen hex digits of the SHA-256 of the raw public
+key, always worked out from the key and never taken from the file.
+
+**What the site does**, in `Mailhouse_Updater`:
+
+- `offer()` offers nothing for a release with no `.sig` beside its zip. Such a
+  release is asked about again in fifteen minutes rather than twelve hours, so
+  one published a moment before its signature is not missed for long.
+- `check_download()` runs on `upgrader_pre_download`, which every way of
+  updating a plugin passes through: the Plugins and Updates screens, bulk
+  updates, automatic updates and WP-CLI. Before WordPress downloads anything
+  it fetches the signature, believes it only if a pinned key signed exactly
+  what it says, and holds the version to the one on offer, which must be newer
+  than the one installed. Then it downloads the zip, unpacks it with
+  `unzip_file()`, the function WordPress is about to use on it, and compares
+  every file. A file missing, added or changed, or a folder other than a
+  single `mailhouse/`, and WordPress gets a `WP_Error` instead of a package.
+  All of this happens before WordPress deactivates the plugin or touches its
+  folder, so a refusal leaves the site exactly as it was.
+- `check_source()` runs on `upgrader_source_selection`, late, and compares the
+  folder WordPress is about to put in place once more. It is for whatever
+  might come between, such as another plugin handing WordPress a package of
+  its own on `upgrader_pre_download`. That package is checked by
+  `check_download()` too, and a folder nothing checked is refused.
+- A refusal is kept as the `mailhouse_update_refused` site option, and Tools →
+  Status says which version was refused and why until a newer one installs.
+
+Without sodium, WordPress's bundled `sodium_compat` is used. Where neither is
+there, nothing installs.
+
+An administrator uploading a zip by hand is not an update and is not checked:
+it is a choice made by someone who could as well edit the files.
+
+**The keys** are in `includes/release-keys.php`, base64 public keys, one per
+line. The keys a site believes are the keys of the version it runs, so a new
+key reaches a site only inside a release signed by a key it already has:
+
+- *To add a key*, pin it in one release (still signed by the old key), and
+  sign with it from the next.
+- *To retire a key*, take it out of a release signed by another.
+- *If a key is lost*, any other key pinned still signs. If the only key is
+  lost, no site can update again except by a zip uploaded by hand. So pin two
+  from the start, kept apart.
+- *If a key is stolen*, publish at once a release signed by another pinned key
+  that no longer pins the stolen one. Sites that install it stop believing the
+  stolen key. Until they do, the thief would still need to get a release onto
+  the repository, which is what two-factor and protected tags are for.
+
+With no key pinned, the plugin installs no update at all, and the release
+workflow refuses to build it. The `mailhouse_release_keys` filter replaces
+the list, for a fork that signs its own releases, and for the tests.
+
 ## Cutting a release
 
 `.github/workflows/release.yml` does the packaging, because the asset is
@@ -612,6 +686,7 @@ It refuses to package a few things:
 | A missing or non-github.com `Update URI` | without it the question goes to wordpress.org |
 | A PHP file that does not parse | cheap to check on the way past |
 | A zip whose root is not a single `mailhouse/` holding that version | WordPress installs a plugin into whatever folder the zip contains |
+| A tag whose `includes/release-keys.php` pins no key | a site running it could never install another update |
 
 Two settings are pinned on the archive, and neither is decoration:
 
@@ -638,6 +713,50 @@ checkout, so the helpers are always the ones from the ref that started the run
 rather than whatever happened to be in the tree being packaged — otherwise it
 could only ever build tags new enough to contain it.
 
+### Signing it
+
+The workflow builds and checks; a person signs, with a key the workflow never
+sees. `tools/release.php` does it, and is kept out of the zip.
+
+Once, on the machine that will sign, make the keys and pin them:
+
+```bash
+php tools/release.php key /somewhere/off/github/mailhouse-release-1.key --pin
+php tools/release.php key /somewhere/else/mailhouse-release-2.key --pin
+```
+
+Each prints its id and public key and writes the secret half to the file
+named, which must not exist yet. `--pin` adds the public half to
+`includes/release-keys.php`; commit that. Keep each secret file off GitHub,
+off any machine CI runs on, and backed up apart from the other.
+
+For each release:
+
+1. Push the `v*` tag. The workflow opens a draft with the zip on it.
+2. From your own checkout, with the tag fetched:
+
+   ```bash
+   gh release download v1.7.0 --pattern mailhouse-1.7.0.zip
+   php tools/release.php sign v1.7.0 /somewhere/off/github/mailhouse-release-1.key --zip mailhouse-1.7.0.zip
+   gh release upload v1.7.0 mailhouse-1.7.0.zip.sig
+   ```
+
+   `sign` reads the files from `git archive` of the tag in your checkout, not
+   from the zip. With `--zip` it unpacks the zip GitHub built and compares it
+   first, and signs nothing if a single file differs. Running it again with
+   the other key adds a second signature to the same file.
+3. Write the notes and publish the draft. Publishing runs the workflow again,
+   and this time it checks the signature with the keys of this version and of
+   the one before, which is what the sites asked to install it are running.
+   A release published without a signature, or with one that does not hold,
+   fails the run loudly: no site will be offered it until it is put right.
+
+`php tools/release.php verify <zip> <sig> --keys <release-keys.php>` checks
+any zip as a site would.
+
+The first release with signature checks is installed by the version before it
+as any update was, unchecked. Every release after that is checked.
+
 ## Tests
 
 Eight scripts under `tests/`, run against a real WordPress rather than mocks —
@@ -653,6 +772,7 @@ php tests/test-features.php  # transports, design, digests
 php tests/test-webhooks.php  # bounce parsing and signature verification
 php tests/test-branding.php  # theme colours, the design, the popup
 php tests/test-updates.php   # the update check, start to finish
+php tests/test-signed-updates.php  # nothing installs unless it is signed
 php tests/test-foundations.php  # change hooks, revisions, the queue claim, send results
 ```
 
@@ -669,6 +789,17 @@ renamed repository, a rate limit — can each be put in front of the code on
 demand. What is real is WordPress: it runs `wp_update_plugins()` and reads the
 transient core wrote, because the question being asked is whether core accepts
 what the filter hands it.
+
+`test-signed-updates.php` runs WordPress's own `Plugin_Upgrader`, single and
+bulk, against releases published to the same stand-in for GitHub: one good,
+and one for every way a release can be wrong. A filter at the head of
+`upgrader_pre_install` stops every upgrade of this plugin that gets that far,
+so nothing is ever installed. Getting that far is what the good release must
+do, and what no bad one may. The plugin's files are hashed before and after
+and must not change. On a site where `wp-content/upgrade-temp-backup` holds a
+backup of this plugin, left by an update that failed, the upgrader part is
+not run: WordPress restores such a backup after a failed install, over the
+plugin. Where git is available it also runs `tools/release.php`.
 
 `tests/bootstrap.php` walks up from the plugin folder looking for
 `wp-load.php`; set `MAILHOUSE_WP_ROOT` to point it somewhere else. Each script

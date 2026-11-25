@@ -55,7 +55,8 @@ mailhouse/
 - **Test send** that reports what the transport actually said.
 - **Updates like any other plugin's**, reported from this repository's releases
   rather than from wordpress.org: a new version shows on the Plugins screen
-  with its notes and installs in one click.
+  with its notes and installs in one click — **only if it is signed**, by a key
+  kept away from GitHub, and every file in it is what was signed.
 
 ### Newsletter — replacing Noptin
 
@@ -330,7 +331,8 @@ mocks.
 | `tests/test-features.php` — 80 assertions | pass |
 | `tests/test-webhooks.php` — 53 assertions | pass |
 | `tests/test-branding.php` — 89 assertions | pass |
-| `tests/test-updates.php` — 65 assertions | pass |
+| `tests/test-updates.php` — 66 assertions | pass |
+| `tests/test-signed-updates.php` — 128 assertions, WordPress's own upgrader run for every way a release can be wrong | pass |
 | `tests/test-foundations.php` — 159 assertions | pass |
 | `tests/test-central.php` — 169 assertions | pass |
 | `tests/test-central-sync.php` — 157 assertions | pass |

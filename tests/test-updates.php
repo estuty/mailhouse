@@ -91,19 +91,28 @@ function mailhouse_stub_github( $release ) {
 /**
  * A release as GitHub reports one.
  *
+ * Every zip attached has its signature beside it, as a release must since
+ * 10.6 to be offered at all; whether a signature holds is for
+ * test-signed-updates.php, which also covers a release without one.
+ *
  * @param string $tag    Tag name.
  * @param array  $assets Asset names to attach.
  * @param string $body   Release notes.
+ * @param bool   $signed Whether each zip has a signature beside it.
  * @return array
  */
-function mailhouse_fake_release( $tag = 'v9.9.0', $assets = array( 'mailhouse-9.9.0.zip' ), $body = 'Notes.' ) {
+function mailhouse_fake_release( $tag = 'v9.9.0', $assets = array( 'mailhouse-9.9.0.zip' ), $body = 'Notes.', $signed = true ) {
 	$attached = array();
 
 	foreach ( $assets as $name ) {
-		$attached[] = array(
-			'name'                 => $name,
-			'browser_download_url' => 'https://github.com/estuty/mailhouse/releases/download/' . $tag . '/' . $name,
-		);
+		$names = $signed && '.zip' === substr( $name, -4 ) ? array( $name, $name . '.sig' ) : array( $name );
+
+		foreach ( $names as $one ) {
+			$attached[] = array(
+				'name'                 => $one,
+				'browser_download_url' => 'https://github.com/estuty/mailhouse/releases/download/' . $tag . '/' . $one,
+			);
+		}
 	}
 
 	return array(
@@ -200,6 +209,10 @@ check( 'a release with no zip on it offers nothing', false === $offer, wp_json_e
 mailhouse_stub_github( mailhouse_fake_release( 'v9.9.0', array( 'notes.txt', 'checksums.txt' ) ) );
 mailhouse_forget_release();
 check( 'and neither does one with only loose files', false === $updater->offer( false, $headers, MAILHOUSE_BASENAME ) );
+
+mailhouse_stub_github( mailhouse_fake_release( 'v9.9.0', array( 'mailhouse-9.9.0.zip' ), 'Notes.', false ) );
+mailhouse_forget_release();
+check( 'nor one whose zip has no signature beside it', false === $updater->offer( false, $headers, MAILHOUSE_BASENAME ) );
 
 echo "== When GitHub does not answer ==\n";
 
