@@ -77,6 +77,12 @@ class Mailhouse_Queue {
 			return 0;
 		}
 
+		// A campaign from the centre goes to who the centre listed, when
+		// the centre said. It is never queued from here.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
+			return 0;
+		}
+
 		$tag_id     = (int) get_post_meta( $post_id, '_mailhouse_tag', true );
 		$subscribers = Mailhouse_Subscribers::query(
 			array(
@@ -344,9 +350,13 @@ class Mailhouse_Queue {
 			return (int) $wpdb->query( "UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending'" );
 		}
 
+		// A message for the centre whose sending was begun stays as it is:
+		// if what became of it could not be written down, nobody knows
+		// whether it went, and it is not to be sent again as though it had
+		// not. reap_stale() finds it later and holds it.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		return (int) $wpdb->query(
-			$wpdb->prepare( "UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending' AND claim_token = %s", $token )
+			$wpdb->prepare( "UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending' AND claim_token = %s AND ( remote_job_id IS NULL OR attempt_started_at IS NULL )", $token )
 		);
 	}
 
@@ -363,12 +373,31 @@ class Mailhouse_Queue {
 		global $wpdb;
 
 		$table = self::table();
+		$stale = gmdate( 'Y-m-d H:i:s', time() - self::STALE_AFTER );
 
+		// A message for the centre that was being handed to the transport
+		// when its process died may have gone, or may not. Nothing here can
+		// tell. It is held, and a person decides: sent again, it might
+		// arrive twice.
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$wpdb->query(
+			$wpdb->prepare(
+				// It was handed to the transport: that was a try, and is counted
+				// as one. Sent again on the centre's word, it is the next.
+				"UPDATE {$table} SET status = 'uncertain', attempts = attempts + 1, error = %s, reported = 1, claim_token = NULL, claimed_at = NULL, attempt_started_at = NULL
+				 WHERE status = 'sending' AND remote_job_id IS NOT NULL AND attempt_started_at IS NOT NULL AND claimed_at < %s",
+				__( 'The process sending it stopped before it could record what happened. It may or may not have gone.', 'mailhouse' ),
+				$stale
+			)
+		);
+
+		// Everything else was claimed and never begun, or is this site's
+		// own, and goes back to be tried: as it always has.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		return (int) $wpdb->query(
 			$wpdb->prepare(
 				"UPDATE {$table} SET status = 'pending', claim_token = NULL, claimed_at = NULL WHERE status = 'sending' AND claimed_at < %s",
-				gmdate( 'Y-m-d H:i:s', time() - self::STALE_AFTER )
+				$stale
 			)
 		);
 	}
@@ -380,6 +409,48 @@ class Mailhouse_Queue {
 	 * @return bool
 	 */
 	protected static function send_row( $row ) {
+		// A message of a campaign written at the centre. It is sent like any
+		// other, and what is unclear about it is treated differently: see
+		// below, and reap_stale().
+		$remote = isset( $row->remote_job_id ) && '' !== (string) $row->remote_job_id;
+
+		// After its deadline, by this site's own clock, nothing more of a
+		// campaign from the centre is sent.
+		if ( $remote && Mailhouse_Central_Campaigns::past_deadline( (int) $row->campaign_id ) ) {
+			self::settle(
+				$row,
+				array(
+					'status' => 'cancelled',
+					'error'  => __( 'Its time had passed.', 'mailhouse' ),
+				)
+			);
+
+			return false;
+		}
+
+		// Held, by this site's administrator or by the centre: it waits
+		// with the rest of its campaign until whoever holds it lets it go.
+		if ( $remote && Mailhouse_Central_Campaigns::held( (int) $row->campaign_id ) ) {
+			self::settle( $row, array( 'status' => 'paused' ) );
+
+			return false;
+		}
+
+		// A copy of the site at another address, or a site whose connector
+		// is switched off, holds these rows and sends none of them. They
+		// wait: a deadline ends the waiting.
+		if ( $remote && ! Mailhouse_Central_Campaigns::may_send() ) {
+			self::settle(
+				$row,
+				array(
+					'status'       => 'pending',
+					'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + 10 * MINUTE_IN_SECONDS ),
+				)
+			);
+
+			return false;
+		}
+
 		$subscriber = Mailhouse_Subscribers::get( (int) $row->subscriber_id );
 
 		// Somebody who unsubscribed after the campaign was queued must not get
@@ -410,7 +481,21 @@ class Mailhouse_Queue {
 			return false;
 		}
 
-		$html = Mailhouse_Tracking::prepare( $message['html'], (int) $row->id );
+		$html    = Mailhouse_Tracking::prepare( $message['html'], (int) $row->id );
+		$headers = self::headers( $subscriber );
+
+		if ( $remote ) {
+			// The centre's name for this message, so that whatever a
+			// provider says of it later can be matched to it.
+			$headers[] = 'X-MH-Job: ' . $row->remote_job_id;
+
+			// Written down before the transport is called: from here on,
+			// a process that dies leaves a message that may have gone.
+			global $wpdb;
+
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->update( self::table(), array( 'attempt_started_at' => mailhouse_now() ), array( 'id' => (int) $row->id ) );
+		}
 
 		$sent = Mailhouse_Mailer::send(
 			$subscriber->email,
@@ -418,7 +503,11 @@ class Mailhouse_Queue {
 			$html,
 			array(
 				'text'          => $message['text'],
-				'headers'       => self::headers( $subscriber ),
+				'headers'       => $headers,
+				// The backup transport is this site's own arrangement for
+				// its own mail. A message for the centre goes by the route
+				// that was chosen for it, or not at all.
+				'no_fallback'   => $remote,
 				'from'          => mailhouse_clean_email( mailhouse_option( 'campaign_from_email' ) ),
 				'from_name'     => (string) mailhouse_option( 'campaign_from_name' ),
 				'reply_to'      => mailhouse_clean_email( mailhouse_option( 'campaign_reply_to' ) ),
@@ -450,21 +539,103 @@ class Mailhouse_Queue {
 		}
 
 		$attempts = (int) $row->attempts + 1;
-		$failed   = $attempts >= 3;
 
-		self::settle(
-			$row,
-			array(
-				'status'       => $failed ? 'failed' : 'pending',
-				'attempts'     => $attempts,
-				'error'        => __( 'Delivery failed. See the email log for the reason.', 'mailhouse' ),
-				// Back off rather than hammering a transport that is refusing
-				// everything.
-				'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + ( $attempts * 5 * MINUTE_IN_SECONDS ) ),
-			)
+		if ( $remote ) {
+			$result = Mailhouse_Mailer::last_result();
+
+			// It may or may not have gone. Held, and never tried again
+			// from here: a second attempt could be a second copy.
+			if ( 'ambiguous' === $result['outcome'] ) {
+				self::settle(
+					$row,
+					array(
+						'status'   => 'uncertain',
+						'attempts' => $attempts,
+						'error'    => '' !== (string) $result['error'] ? substr( (string) $result['error'], 0, 500 ) : __( 'The transport did not say whether it took the message.', 'mailhouse' ),
+					)
+				);
+
+				return false;
+			}
+
+			// Refused for good: an address that does not exist is not
+			// asked about twice more.
+			if ( ! empty( $result['permanent'] ) ) {
+				self::settle(
+					$row,
+					array(
+						'status'      => 'failed',
+						'attempts'    => $attempts,
+						'error'       => '' !== (string) $result['error'] ? substr( (string) $result['error'], 0, 500 ) : __( 'The transport refused the message.', 'mailhouse' ),
+						'error_class' => 'permanent',
+					)
+				);
+
+				return false;
+			}
+		}
+
+		$failed = $attempts >= 3;
+		$fields = array(
+			'status'       => $failed ? 'failed' : 'pending',
+			'attempts'     => $attempts,
+			'error'        => __( 'Delivery failed. See the email log for the reason.', 'mailhouse' ),
+			// Back off rather than hammering a transport that is refusing
+			// everything.
+			'scheduled_at' => gmdate( 'Y-m-d H:i:s', time() + ( $attempts * 5 * MINUTE_IN_SECONDS ) ),
 		);
 
+		if ( $remote ) {
+			// The centre is told the real reason at the time, so that it
+			// does not die with this site's log; and that the refusal was
+			// one that might have passed, tried as often as it is tried.
+			if ( '' !== (string) $result['error'] ) {
+				$fields['error'] = substr( (string) $result['error'], 0, 500 );
+			}
+
+			if ( $failed ) {
+				$fields['error_class'] = 'transient';
+			}
+		}
+
+		self::settle( $row, $fields );
+
 		return false;
+	}
+
+	/**
+	 * Take people out of whatever the centre's campaigns still hold for
+	 * them, and keep the record.
+	 *
+	 * A row of this site's own campaign is simply deleted when its
+	 * subscriber unsubscribes or is removed: nobody else is waiting to hear
+	 * of it. A row of a campaign from the centre is one the centre counted,
+	 * and is owed an answer. It becomes `skipped`, and stays.
+	 *
+	 * @param int|int[] $subscriber_ids Subscriber ids.
+	 * @param string    $reason         Why, in words.
+	 * @return int Rows marked.
+	 */
+	public static function withdraw_remote( $subscriber_ids, $reason = '' ) {
+		global $wpdb;
+
+		$ids = array_filter( array_map( 'absint', (array) $subscriber_ids ) );
+
+		if ( ! $ids ) {
+			return 0;
+		}
+
+		$table  = self::table();
+		$reason = '' !== $reason ? $reason : __( 'No longer subscribed.', 'mailhouse' );
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		return (int) $wpdb->query(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				"UPDATE {$table} SET status = 'skipped', error = %s, reported = 1, claim_token = NULL, claimed_at = NULL WHERE remote_job_id IS NOT NULL AND status IN ('waiting', 'pending', 'paused') AND subscriber_id IN (" . implode( ',', $ids ) . ')',
+				$reason
+			)
+		);
 	}
 
 	/**
@@ -479,6 +650,15 @@ class Mailhouse_Queue {
 
 		$fields['claim_token'] = null;
 		$fields['claimed_at']  = null;
+
+		if ( ! empty( $row->remote_job_id ) ) {
+			$fields['attempt_started_at'] = null;
+
+			// What became of a message for the centre is owed to the centre.
+			if ( isset( $fields['status'] ) && in_array( $fields['status'], array( 'sent', 'failed', 'skipped', 'uncertain', 'cancelled' ), true ) ) {
+				$fields['reported'] = 1;
+			}
+		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$wpdb->update( self::table(), $fields, array( 'id' => (int) $row->id ) );
@@ -560,6 +740,8 @@ class Mailhouse_Queue {
 					SUM(status = 'sent') AS sent,
 					SUM(status = 'failed') AS failed,
 					SUM(status = 'skipped') AS skipped,
+					SUM(status = 'uncertain') AS uncertain,
+					SUM(status = 'cancelled') AS cancelled,
 					SUM(opened_at IS NOT NULL) AS opened,
 					SUM(clicked_at IS NOT NULL) AS clicked
 				 FROM {$table} WHERE campaign_id = %d",
@@ -568,7 +750,7 @@ class Mailhouse_Queue {
 			ARRAY_A
 		);
 
-		$stats = array_fill_keys( array( 'total', 'pending', 'sent', 'failed', 'skipped', 'opened', 'clicked' ), 0 );
+		$stats = array_fill_keys( array( 'total', 'pending', 'sent', 'failed', 'skipped', 'uncertain', 'cancelled', 'opened', 'clicked' ), 0 );
 
 		foreach ( (array) $row as $key => $value ) {
 			$stats[ $key ] = (int) $value;
@@ -599,6 +781,11 @@ class Mailhouse_Queue {
 	public function handle_send() {
 		$post_id = $this->authorise( 'mailhouse_send_campaign' );
 
+		// Not this site's to start: the centre said who and when.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
+			$this->redirect_back( $post_id, 'central' );
+		}
+
 		$send_at = (string) get_post_meta( $post_id, '_mailhouse_send_at', true );
 		$when    = 0;
 
@@ -624,6 +811,14 @@ class Mailhouse_Queue {
 	public function handle_pause() {
 		$post_id = $this->authorise( 'mailhouse_pause_campaign' );
 
+		// A campaign from the centre is held by its own rules: who holds it
+		// is remembered, and the centre is told.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
+			Mailhouse_Central_Campaigns::hold_locally( $post_id );
+
+			$this->redirect_back( $post_id, 'paused' );
+		}
+
 		global $wpdb;
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
@@ -641,6 +836,18 @@ class Mailhouse_Queue {
 	 */
 	public function handle_resume() {
 		$post_id = $this->authorise( 'mailhouse_resume_campaign' );
+
+		// This site's administrator lifts this site's hold. One the centre
+		// put on stays until the centre lifts it.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
+			$free = Mailhouse_Central_Campaigns::release_locally( $post_id );
+
+			if ( $free ) {
+				self::kick();
+			}
+
+			$this->redirect_back( $post_id, $free ? 'resumed' : 'paused' );
+		}
 
 		global $wpdb;
 
@@ -673,6 +880,18 @@ class Mailhouse_Queue {
 		$post_id = $this->authorise( 'mailhouse_cancel_campaign' );
 
 		global $wpdb;
+
+		// A campaign from the centre is called off, not deleted: what was
+		// not sent is kept as the record, and the centre is told.
+		if ( Mailhouse_Central_Campaigns::is_central( $post_id ) ) {
+			Mailhouse_Central_Campaigns::cancel_locally( $post_id );
+
+			$stats = self::campaign_stats( $post_id );
+
+			update_post_meta( $post_id, '_mailhouse_status', $stats['sent'] ? 'sent' : '' );
+
+			$this->redirect_back( $post_id, 'cancelled' );
+		}
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(

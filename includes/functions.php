@@ -107,18 +107,40 @@ function mailhouse_date( $datetime ) {
  * Links become "text <url>" so the address survives in a text-only client,
  * and block-level tags become line breaks.
  *
+ * Each address is set aside before the tags are removed and put back
+ * afterwards. Written straight into the text as `<url>` it would be taken
+ * for a tag and removed with the rest, which is what this did until 1.6.0:
+ * the text part of every email had no links, the unsubscribe link among
+ * them.
+ *
  * @param string $html HTML body.
  * @return string
  */
 function mailhouse_html_to_text( $html ) {
-	$text = preg_replace( '#<(style|script|head)\b[^>]*>.*?</\1>#is', '', $html );
-	$text = preg_replace( '#<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>#is', '$2 <$1>', $text );
-	$text = preg_replace( '#<(br|/p|/div|/tr|/h[1-6]|/li)[^>]*>#i', "\n", $text );
-	$text = preg_replace( '#<li[^>]*>#i', '- ', $text );
-	$text = wp_strip_all_tags( $text );
-	$text = html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
-	$text = preg_replace( "/[ \t]+/", ' ', $text );
-	$text = preg_replace( "/\n{3,}/", "\n\n", $text );
+	$links = array();
+	$text  = (string) preg_replace( '#<(style|script|head)\b[^>]*>.*?</\1>#is', '', (string) $html );
+	$text  = (string) preg_replace_callback(
+		'#<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>#is',
+		static function ( $found ) use ( &$links ) {
+			$links[] = html_entity_decode( $found[1], ENT_QUOTES, 'UTF-8' );
+
+			return $found[2] . ' %%mailhouse-link-' . ( count( $links ) - 1 ) . '%%';
+		},
+		$text
+	);
+	$text  = (string) preg_replace( '#<(br|/p|/div|/tr|/h[1-6]|/li)[^>]*>#i', "\n", $text );
+	$text  = (string) preg_replace( '#<li[^>]*>#i', '- ', $text );
+	$text  = wp_strip_all_tags( $text );
+	$text  = html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
+	$text  = (string) preg_replace( "/[ \t]+/", ' ', $text );
+	$text  = (string) preg_replace( "/\n{3,}/", "\n\n", $text );
+	$text  = (string) preg_replace_callback(
+		'/%%mailhouse-link-(\d+)%%/',
+		static function ( $found ) use ( $links ) {
+			return isset( $links[ (int) $found[1] ] ) ? '<' . $links[ (int) $found[1] ] . '>' : '';
+		},
+		$text
+	);
 
 	return trim( $text );
 }

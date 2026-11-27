@@ -15,7 +15,7 @@ class Mailhouse_Install {
 	/**
 	 * Schema version. Bumped whenever a CREATE TABLE below changes.
 	 */
-	const DB_VERSION = '1.2.0';
+	const DB_VERSION = '1.7.0';
 
 	/**
 	 * Option holding the installed schema version.
@@ -176,13 +176,21 @@ class Mailhouse_Install {
 				provider_message_id varchar(191) DEFAULT NULL,
 				remote_job_id char(36) DEFAULT NULL,
 				reported tinyint(3) unsigned NOT NULL DEFAULT 0,
+				attempt_started_at datetime DEFAULT NULL,
+				error_class varchar(10) DEFAULT NULL,
+				delivered_at datetime DEFAULT NULL,
+				bounced_at datetime DEFAULT NULL,
+				bounce_class varchar(4) DEFAULT NULL,
+				bounce_reason varchar(300) DEFAULT NULL,
+				complained_at datetime DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY campaign_subscriber (campaign_id,subscriber_id),
 				UNIQUE KEY remote_job (remote_job_id),
 				KEY status_scheduled (status,scheduled_at),
 				KEY campaign_status (campaign_id,status),
 				KEY claim (claim_token),
-				KEY report (reported,id)
+				KEY report (reported,id),
+				KEY provider_message (provider_message_id)
 			) {$collate};"
 		);
 
@@ -206,6 +214,90 @@ class Mailhouse_Install {
 				KEY status (status),
 				KEY created_at (created_at),
 				KEY campaign_id (campaign_id)
+			) {$collate};"
+		);
+
+		// What has changed on this site and not yet been told to a Mailhouse
+		// Central installation. Empty, and never written to, on a site that
+		// is not connected to one.
+		$outbox = self::table( 'outbox' );
+		dbDelta(
+			"CREATE TABLE {$outbox} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				event_id char(36) NOT NULL,
+				type varchar(40) NOT NULL,
+				subject_type varchar(12) NOT NULL DEFAULT 'subscriber',
+				subject_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				origin varchar(48) NOT NULL DEFAULT 'local',
+				payload longtext NOT NULL,
+				occurred_at datetime NOT NULL,
+				PRIMARY KEY  (id),
+				KEY occurred_at (occurred_at)
+			) {$collate};"
+		);
+
+		// What a Mailhouse Central installation has asked this site to do,
+		// and what became of each request: the record that makes a command
+		// arriving twice a command carried out once. It holds an id, a kind
+		// and an outcome, and nothing about any subscriber. Empty on a site
+		// that is not connected.
+		$inbox = self::table( 'inbox' );
+		dbDelta(
+			"CREATE TABLE {$inbox} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				command_id char(36) NOT NULL,
+				seq bigint(20) unsigned NOT NULL DEFAULT 0,
+				type varchar(40) NOT NULL DEFAULT '',
+				status varchar(12) NOT NULL DEFAULT 'applying',
+				result text DEFAULT NULL,
+				received_at datetime NOT NULL,
+				acked tinyint(1) NOT NULL DEFAULT 0,
+				PRIMARY KEY  (id),
+				UNIQUE KEY command_id (command_id),
+				KEY acked (acked)
+			) {$collate};"
+		);
+
+		// Campaigns written in a Mailhouse Central installation and sent by
+		// this site: what each says, where to stop, and how far fetching its
+		// recipients has got. The recipients themselves are rows of the
+		// queue, like anybody else's. Empty on a site that is not connected.
+		$remote = self::table( 'remote_campaigns' );
+		dbDelta(
+			"CREATE TABLE {$remote} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				execution_id char(36) NOT NULL,
+				campaign_id char(36) NOT NULL,
+				post_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				name varchar(191) NOT NULL DEFAULT '',
+				subject text NOT NULL,
+				preheader text NOT NULL,
+				body_html longtext NOT NULL,
+				body_text longtext NOT NULL,
+				content_hash char(64) NOT NULL,
+				recipient_count int(10) unsigned NOT NULL DEFAULT 0,
+				recipients_hash char(64) NOT NULL,
+				fields text NOT NULL,
+				start_at datetime NOT NULL,
+				deadline_at datetime NOT NULL,
+				state varchar(20) NOT NULL DEFAULT 'preparing',
+				fetch_after bigint(20) unsigned NOT NULL DEFAULT 0,
+				fetched tinyint(1) NOT NULL DEFAULT 0,
+				unknown longtext NOT NULL,
+				unknown_count int(10) unsigned NOT NULL DEFAULT 0,
+				error text DEFAULT NULL,
+				reported_state varchar(20) NOT NULL DEFAULT '',
+				reported_at int(10) unsigned NOT NULL DEFAULT 0,
+				next_at int(10) unsigned NOT NULL DEFAULT 0,
+				started_at datetime DEFAULT NULL,
+				hold varchar(10) NOT NULL DEFAULT '',
+				unknown_reported tinyint(1) NOT NULL DEFAULT 0,
+				created_at datetime NOT NULL,
+				updated_at datetime NOT NULL,
+				PRIMARY KEY  (id),
+				UNIQUE KEY execution_id (execution_id),
+				KEY post_id (post_id),
+				KEY state (state)
 			) {$collate};"
 		);
 
@@ -265,7 +357,7 @@ class Mailhouse_Install {
 	public static function drop_tables() {
 		global $wpdb;
 
-		foreach ( array( 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
+		foreach ( array( 'remote_campaigns', 'inbox', 'outbox', 'log', 'queue', 'subscriber_tags', 'tags', 'subscribers' ) as $name ) {
 			$table = self::table( $name );
 
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery

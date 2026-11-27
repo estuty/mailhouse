@@ -315,6 +315,53 @@ Mailhouse_Webhooks::process( 'postmark', wp_json_encode( array( 'RecordType' => 
 Mailhouse_Webhooks::process( 'postmark', wp_json_encode( array( 'RecordType' => 'SubscriptionChange', 'Email' => $pm_off->email, 'SuppressSending' => true ) ) );
 
 check( 'a Postmark hard bounce retires the address', 'bounced' === mailhouse_status_of( $pm_hard ) );
+
+// A delivery, as Postmark writes one: its reader is `Recipient`, not `Email`.
+$seen    = array();
+$capture = static function ( $events ) use ( &$seen ) {
+	$seen = $events;
+
+	return $events;
+};
+add_filter( 'mailhouse_webhook_events', $capture );
+$result = Mailhouse_Webhooks::process(
+	'postmark',
+	wp_json_encode(
+		array(
+			'RecordType'  => 'Delivery',
+			'MessageID'   => '883953f4-6105-42a2-a16a-77a8eac79483',
+			'Recipient'   => $pm_soft->email,
+			'DeliveredAt' => '2026-11-19T08:00:00Z',
+			'Details'     => 'delivered',
+		)
+	)
+);
+remove_filter( 'mailhouse_webhook_events', $capture );
+check( 'a Postmark delivery is read: who it was to, which message, and when', 1 === count( $seen ) && 'delivered' === $seen[0]['type'] && $pm_soft->email === $seen[0]['email'] && '883953f4-6105-42a2-a16a-77a8eac79483' === $seen[0]['message_id'] && strtotime( '2026-11-19T08:00:00Z' ) === $seen[0]['occurred_at'], wp_json_encode( $seen ) );
+check( 'and clears the count of soft bounces, as a delivery through any provider does', is_array( $result ) && 1 === $result['applied'] && 0 === (int) Mailhouse_Subscribers::get( $pm_soft->id )->bounces, wp_json_encode( $result ) );
+
+// Resend's own word for a bounce that may pass.
+$rs_soft   = mailhouse_fixture( 'rs_soft' );
+$created[] = $rs_soft;
+Mailhouse_Webhooks::process(
+	'resend',
+	wp_json_encode(
+		array(
+			'type'       => 'email.bounced',
+			'created_at' => '2026-11-19T08:00:00Z',
+			'data'       => array(
+				'email_id' => 're-1',
+				'to'       => array( $rs_soft->email ),
+				'bounce'   => array(
+					'type'    => 'Temporary',
+					'subType' => 'MailboxFull',
+					'message' => 'The mailbox is full',
+				),
+			),
+		)
+	)
+);
+check( 'a Resend bounce that may pass (“Temporary”) does not retire the address', 'subscribed' === mailhouse_status_of( $rs_soft ) && 1 === (int) Mailhouse_Subscribers::get( $rs_soft->id )->bounces );
 check( 'a Postmark soft bounce does not', 'subscribed' === mailhouse_status_of( $pm_soft ) );
 check( 'a Postmark suppression unsubscribes', 'unsubscribed' === mailhouse_status_of( $pm_off ) );
 

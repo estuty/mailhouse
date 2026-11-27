@@ -182,6 +182,19 @@ class Mailhouse_Merge_Tags {
 			$values['post_card']    = self::card( $post, $values );
 		}
 
+		// A campaign that names the custom fields it uses: one this
+		// subscriber does not have is empty for them, and takes its
+		// fallback, where a tag nobody knows is left as it was written.
+		if ( ! empty( $context['fields'] ) && is_array( $context['fields'] ) ) {
+			foreach ( $context['fields'] as $name ) {
+				$name = strtolower( (string) $name );
+
+				if ( '' !== $name && ! array_key_exists( $name, $values ) ) {
+					$values[ $name ] = '';
+				}
+			}
+		}
+
 		/**
 		 * Filter the merge tag values for one recipient.
 		 *

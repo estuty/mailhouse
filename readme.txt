@@ -4,7 +4,7 @@ Tags: smtp, newsletter, email log, mailing list, email
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.6.0
+Stable tag: 1.7.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,9 +39,20 @@ SMTP plugin, and the seam between them is where sites quietly break.
 * Open and click tracking, off by default and clearly labelled.
 * CSV import and export, and importers for Noptin and WP Mail SMTP.
 
+**Mailhouse Central (optional)**
+
+* Connect the site to Mailhouse Central to run several sites' lists and
+  newsletters from one dashboard.
+* The site keeps its own list, consent and mail passwords. Central gets a copy
+  of the list, and newsletters written there are sent by the site itself,
+  through its own transport.
+* Read-only until you allow changes, from Central or with a constant in
+  wp-config.php. Disconnecting leaves the site exactly as it was.
+
 **Privacy**
 
-Nothing is sent anywhere except through the mail transport you configure. No
+Nothing is sent anywhere except through the mail transport you configure, and,
+only if you connect the site, to the Mailhouse Central you connected it to. No
 analytics, no upsell notices, no phoning home. Tracking is opt-in. Message
 bodies are not logged unless you ask for it, so password resets and receipts do
 not sit in the database.
@@ -64,6 +75,11 @@ Mailhouse is not on the wordpress.org directory, so it reports its own updates
 from its releases on GitHub. A new version appears on the Plugins and Updates
 screens with its release notes and installs with one click, and WordPress's
 own plugin auto-update toggle works on it like any other plugin.
+
+Only a signed release installs. Each release is signed with a key kept away
+from GitHub, and the plugin compares every file of the download with what was
+signed before WordPress installs it; anything missing, added, changed or
+unsigned is refused, and the site is left exactly as it was.
 
 Nothing is sent anywhere. The check is a read of the public releases list, no
 site data goes with it, and it runs on WordPress's existing twice-daily
@@ -108,6 +124,33 @@ Advanced before uninstalling.
 4. Writing a broadcast, with recipients and merge tags alongside.
 
 == Changelog ==
+
+= 1.7.0 =
+Sites can now connect to Mailhouse Central. Nothing changes on a site that is
+not connected, apart from the importer fix below.
+
+* New: connect to Mailhouse Central under Mailhouse -> Settings -> Central, with a
+  one-time token from the Central dashboard. The site reports in every minute,
+  sends Central a copy of its list and every change to it, and carries out
+  what Central asks: adding or updating subscribers, tags and unsubscribes,
+  and sending newsletters written at Central through the site's own transport.
+* A connected site is read-only to Central until changes are allowed, there or
+  with MAILHOUSE_CENTRAL_READ_ONLY in wp-config.php. Nobody who unsubscribed
+  can be put back on the list from Central.
+* Central is told what became of each message it asked for: accepted,
+  refused, bounced, or unknown. A send that may or may not have gone out is
+  never retried automatically.
+* Every request between the site and Central is signed. The site's key and
+  Central's keys can be replaced without reconnecting.
+* Updates are signed. A site installs no new version unless it is signed with
+  a key pinned in the version it runs, and every file in the download matches
+  what was signed.
+* Fixed: the Noptin importer brought everybody who had ever confirmed across
+  as subscribed on Noptin 2.0 and later, including people who had
+  unsubscribed, bounced or complained. It now reads Noptin's status column.
+* Fixed: the CSV import's "Pending" option said it would send confirmation
+  emails, but it never did. It now says they are asked to confirm later, from
+  the Subscribers screen, which is what happens.
 
 = 1.6.0 =
 Nothing new to look at. This release is about the plugin being able to say

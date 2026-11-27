@@ -173,7 +173,8 @@ class Mailhouse_Tracking {
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
 			$wpdb->prepare(
-				"UPDATE {$table} SET opens = opens + 1, opened_at = COALESCE(opened_at, %s) WHERE id = %d",
+				// Left to right: whether it is owed is decided before the time is written.
+				"UPDATE {$table} SET reported = IF(remote_job_id IS NOT NULL AND reported = 2 AND opened_at IS NULL, 3, reported), opens = opens + 1, opened_at = COALESCE(opened_at, %s) WHERE id = %d",
 				mailhouse_now(),
 				$queue_id
 			)
@@ -196,7 +197,8 @@ class Mailhouse_Tracking {
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
 			$wpdb->prepare(
-				"UPDATE {$table} SET clicks = clicks + 1, clicked_at = COALESCE(clicked_at, %s), opened_at = COALESCE(opened_at, %s) WHERE id = %d",
+				// Left to right: whether it is owed is decided before the time is written.
+				"UPDATE {$table} SET reported = IF(remote_job_id IS NOT NULL AND reported = 2 AND clicked_at IS NULL, 3, reported), clicks = clicks + 1, clicked_at = COALESCE(clicked_at, %s), opened_at = COALESCE(opened_at, %s) WHERE id = %d",
 				mailhouse_now(),
 				mailhouse_now(),
 				$queue_id

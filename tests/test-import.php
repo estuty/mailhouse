@@ -197,6 +197,73 @@ check( 'active=1 means unsubscribed, not subscribed', $inactive && 'unsubscribed
 check( 'everyone imported carries the import tag', $confirmed && 1 === count( Mailhouse_Tags::for_subscriber( $confirmed->id ) ) );
 check( 'the import emailed nobody', 1 === count( $sent ), 'sends: ' . count( $sent ) );
 
+echo "== Noptin 2.0+ import (a status column, no active) ==\n";
+
+// Noptin 2.0 replaced `active` with `status`, keeping `confirmed`; 4.5 has
+// seven statuses. Reading the table as the old one put everybody who had
+// ever confirmed back on the list, whatever their status said.
+$wpdb->query( "DROP TABLE IF EXISTS {$noptin}" );
+$wpdb->query(
+	"CREATE TABLE {$noptin} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		email varchar(191) NOT NULL,
+		status varchar(12) NOT NULL DEFAULT 'subscribed',
+		source varchar(100) DEFAULT NULL,
+		confirmed tinyint(1) NOT NULL DEFAULT 0,
+		first_name varchar(100) DEFAULT '',
+		last_name varchar(100) DEFAULT '',
+		date_created datetime DEFAULT NULL,
+		PRIMARY KEY (id)
+	)"
+);
+
+$noptin_rows = array(
+	// status => array( confirmed, expected Mailhouse status ).
+	'subscribed'   => array( 1, 'subscribed' ),
+	'pending'      => array( 0, 'pending' ),
+	'unsubscribed' => array( 1, 'unsubscribed' ),
+	'inactive'     => array( 1, 'unsubscribed' ),
+	'bounced'      => array( 1, 'bounced' ),
+	'complained'   => array( 1, 'unsubscribed' ),
+	'blocked'      => array( 1, 'unsubscribed' ),
+	'SomethingNew' => array( 1, 'unsubscribed' ),
+);
+
+foreach ( $noptin_rows as $noptin_status => $expect ) {
+	$wpdb->insert(
+		$noptin,
+		array(
+			'email'        => 'noptin4-' . strtolower( $noptin_status ) . "-$run@example.com",
+			'status'       => $noptin_status,
+			'confirmed'    => $expect[0],
+			'first_name'   => 'Grace',
+			'last_name'    => 'Hopper',
+			'date_created' => '2024-05-06 07:08:09',
+		)
+	);
+}
+
+// Without double opt-in, Noptin subscribes people who never confirmed.
+$wpdb->insert( $noptin, array( 'email' => "noptin4-unconfirmed-subscribed-$run@example.com", 'status' => 'subscribed', 'confirmed' => 0 ) );
+
+$sends_before = count( $sent );
+$imported     = $reflect->invoke( $tools );
+
+check( 'every Noptin 2.0+ row imported', count( $noptin_rows ) + 1 === $imported, "imported: $imported" );
+
+foreach ( $noptin_rows as $noptin_status => $expect ) {
+	$row = Mailhouse_Subscribers::get_by_email( 'noptin4-' . strtolower( $noptin_status ) . "-$run@example.com" );
+	check( "Noptin '$noptin_status' becomes $expect[1]", $row && $expect[1] === $row->status, $row ? $row->status : 'missing' );
+}
+
+$row = Mailhouse_Subscribers::get_by_email( "noptin4-unconfirmed-subscribed-$run@example.com" );
+check( 'subscribed but never confirmed stays subscribed (no double opt-in)', $row && 'subscribed' === $row->status, $row ? $row->status : 'missing' );
+
+$row = Mailhouse_Subscribers::get_by_email( "noptin4-subscribed-$run@example.com" );
+check( 'last_name is read when there is no second_name', $row && 'Grace' === $row->first_name && 'Hopper' === $row->last_name );
+check( 'the signup date and time came across', $row && 0 === strpos( (string) $row->created_at, '2024-05-06 07:08:09' ), $row ? $row->created_at : '' );
+check( 'the Noptin 2.0+ import emailed nobody', count( $sent ) === $sends_before, 'sends: ' . ( count( $sent ) - $sends_before ) );
+
 echo "== WP Mail SMTP settings import ==\n";
 
 update_option(

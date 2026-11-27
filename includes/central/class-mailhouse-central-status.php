@@ -1,0 +1,135 @@
+<?php
+/**
+ * What this site tells the centre about itself.
+ *
+ * Counts, versions and whether things are set up. Never an address, a
+ * subscriber, a host name or a credential: there is no field here that
+ * could carry one, and the centre keeps only the fields it knows.
+ *
+ * @package Mailhouse
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Heartbeat contents.
+ */
+class Mailhouse_Central_Status {
+
+	/**
+	 * What this version of the connector can do, as the centre names it.
+	 *
+	 * `sync.v1`: this site's changes are sent to the centre. `reconcile.v1`:
+	 * the two copies can be compared. `subscribers.commands.v1`: this site
+	 * carries out what the centre asks of its subscribers and tags.
+	 * `delivery.events.v1`: where this site's provider says what became of
+	 * a message afterwards, this site can say which message.
+	 *
+	 * @return string[]
+	 */
+	public static function capabilities() {
+		/**
+		 * Filter the capabilities the connector announces.
+		 *
+		 * @param string[] $capabilities Capability names.
+		 */
+		$capabilities = array( 'sync.v1', 'reconcile.v1', Mailhouse_Central_Template::CAPABILITY );
+
+		// Announced only by a site that will do what it is asked. A site
+		// that does not announce it is never offered a command.
+		if ( Mailhouse_Central_Commands::accepting() ) {
+			$capabilities[] = Mailhouse_Central_Commands::CAPABILITY;
+			// A campaign is handed over as a command, so it is taken in
+			// only by a site that takes commands.
+			$capabilities[] = Mailhouse_Central_Campaigns::CAPABILITY;
+			// And only a site that sends for the centre has anything to
+			// say about what became of a message.
+			$capabilities[] = Mailhouse_Central_Delivery::CAPABILITY;
+			// Asked to change its key by a command, so only by a site
+			// that takes commands.
+			$capabilities[] = Mailhouse_Central_Commands::KEYS_CAPABILITY;
+		}
+
+		return array_values( array_filter( (array) apply_filters( 'mailhouse_central_capabilities', $capabilities ), 'is_string' ) );
+	}
+
+	/**
+	 * The body of a heartbeat.
+	 *
+	 * @return array
+	 */
+	public static function report() {
+		$state            = Mailhouse_Central_Identity::state();
+		$now              = time() + (int) $state['clock_offset'];
+		list( $site_url ) = Mailhouse_Central_Identity::site_url();
+		$subscribers      = Mailhouse_Subscribers::counts();
+		$site_mailer      = (string) mailhouse_option( 'mailer', 'php' );
+		$campaign_mailer  = (string) mailhouse_option( 'campaign_mailer', '' );
+		$provider         = Mailhouse_Mailer::provider( $site_mailer );
+		$error            = '' !== (string) $state['last_error'] ? (string) $state['last_error'] : (string) $state['command_error'];
+
+		return array(
+			'site_url_hash'  => Mailhouse_Central_Protocol::site_url_hash( (string) $site_url ),
+			'plugin_version' => MAILHOUSE_VERSION,
+			'schema_version' => Mailhouse_Install::DB_VERSION,
+			'capabilities'   => self::capabilities(),
+			'clock'          => gmdate( 'Y-m-d\TH:i:s\Z', $now ),
+			'timezone'       => wp_timezone_string(),
+			'cron'           => array(
+				'last_tick' => $state['last_tick_at'] ? gmdate( 'Y-m-d\TH:i:s\Z', (int) $state['last_tick_at'] ) : null,
+				'disabled'  => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
+			),
+			// Which transport, and whether it is set up. Nothing about how.
+			'transport'      => array(
+				'site'     => $site_mailer,
+				'campaign' => '' !== $campaign_mailer ? $campaign_mailer : $site_mailer,
+				'ready'    => $provider ? (bool) $provider->is_configured() : false,
+				// The providers that have called this site lately to say
+				// what became of a message. Names, and nothing else.
+				'callbacks' => Mailhouse_Central_Delivery::callers(),
+			),
+			'tracking'       => array(
+				'opens'  => (bool) mailhouse_option( 'track_opens', false ),
+				'clicks' => (bool) mailhouse_option( 'track_clicks', false ),
+			),
+			'outbox'         => Mailhouse_Central_Sync::report(),
+			'sync'           => Mailhouse_Central_Reconcile::report(),
+			'inbox'          => Mailhouse_Central_Commands::report(),
+			// The platform keys this site trusts, by id: how the centre knows
+			// a new one has reached it (10.5).
+			'platform_keys'  => array_values( array_filter( array_map( 'strval', wp_list_pluck( (array) $state['platform_keys'], 'key_id' ) ) ) ),
+			'queue'          => self::queue(),
+			'subscribers'    => array(
+				'subscribed'   => (int) $subscribers['subscribed'],
+				'pending'      => (int) $subscribers['pending'],
+				'unsubscribed' => (int) $subscribers['unsubscribed'],
+				'bounced'      => (int) $subscribers['bounced'],
+			),
+			'last_error'     => '' === $error ? null : substr( $error, 0, 500 ),
+		);
+	}
+
+	/**
+	 * How much is waiting in the send queue.
+	 *
+	 * @return array<string,int>
+	 */
+	protected static function queue() {
+		global $wpdb;
+
+		$table  = Mailhouse_Queue::table();
+		$counts = array(
+			'pending' => 0,
+			'sending' => 0,
+		);
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
+		$rows = (array) $wpdb->get_results( "SELECT status, COUNT(*) AS total FROM {$table} WHERE status IN ('pending', 'sending') GROUP BY status" );
+
+		foreach ( $rows as $row ) {
+			$counts[ $row->status ] = (int) $row->total;
+		}
+
+		return $counts;
+	}
+}

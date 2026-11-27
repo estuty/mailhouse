@@ -133,7 +133,7 @@ class Mailhouse_Subscribers_Screen {
 
 			case 'unsubscribe':
 				foreach ( $ids as $id ) {
-					Mailhouse_Subscribers::unsubscribe( Mailhouse_Subscribers::get( $id ) );
+					Mailhouse_Subscribers::unsubscribe( Mailhouse_Subscribers::get( $id ), 'admin' );
 				}
 
 				$this->redirect( 'updated' );

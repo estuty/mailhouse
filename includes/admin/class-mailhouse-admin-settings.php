@@ -525,6 +525,16 @@ class Mailhouse_Admin_Settings {
 				<?php endforeach; ?>
 			</h2>
 
+			<?php
+			// A tab that is not a list of settings draws itself: it has forms
+			// and actions of its own, which cannot sit inside this one.
+			if ( isset( $tabs[ $current ]['render'] ) && is_callable( $tabs[ $current ]['render'] ) ) {
+				call_user_func( $tabs[ $current ]['render'] );
+				echo '</div>';
+				return;
+			}
+			?>
+
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="mailhouse_save_settings" />
 				<input type="hidden" name="tab" value="<?php echo esc_attr( $current ); ?>" />

@@ -462,10 +462,11 @@ class Mailhouse_Subscribers {
 	/**
 	 * Delete subscribers outright, tags and queued sends included.
 	 *
-	 * @param int[] $ids Subscriber ids.
+	 * @param int[]  $ids    Subscriber ids.
+	 * @param string $reason Why: `admin`, or `erasure` for a request to be forgotten.
 	 * @return int Rows deleted.
 	 */
-	public static function delete( $ids ) {
+	public static function delete( $ids, $reason = 'admin' ) {
 		global $wpdb;
 
 		$ids = array_filter( array_map( 'absint', (array) $ids ) );
@@ -493,15 +494,18 @@ class Mailhouse_Subscribers {
 			 * object, so a plain list would arrive as a bare row whenever
 			 * exactly one subscriber was deleted.
 			 *
-			 * @param array<int,object> $rows The rows about to go, keyed by id.
+			 * @param array<int,object> $rows   The rows about to go, keyed by id.
+			 * @param string            $reason Why they are going.
 			 */
-			do_action( 'mailhouse_subscribers_deleting', $rows );
+			do_action( 'mailhouse_subscribers_deleting', $rows, (string) $reason );
 		}
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$pivot} WHERE subscriber_id IN ({$placeholders})", $ids ) );
+		// What a campaign from the centre holds for them is kept, as not sent.
+		Mailhouse_Queue::withdraw_remote( $ids, __( 'No longer on the list.', 'mailhouse' ) );
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id IN ({$placeholders}) AND status = 'pending'", $ids ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id IN ({$placeholders}) AND status = 'pending' AND remote_job_id IS NULL", $ids ) );
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$deleted = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id IN ({$placeholders})", $ids ) );
 
@@ -594,9 +598,10 @@ class Mailhouse_Subscribers {
 	 *
 	 * @param object $subscriber Subscriber row.
 	 * @param string $reason     What the provider said.
+	 * @param string $kind       `hard`, or `soft_limit` for a mailbox that was full once too often.
 	 * @return bool Whether this call is what changed the status.
 	 */
-	public static function mark_bounced( $subscriber, $reason = '' ) {
+	public static function mark_bounced( $subscriber, $reason = '', $kind = 'hard' ) {
 		if ( ! $subscriber || 'bounced' === $subscriber->status ) {
 			return false;
 		}
@@ -609,8 +614,9 @@ class Mailhouse_Subscribers {
 		 *
 		 * @param object $subscriber Subscriber row.
 		 * @param string $reason     What the provider said.
+		 * @param string $kind       `hard` or `soft_limit`.
 		 */
-		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason );
+		do_action( 'mailhouse_subscriber_bounced', self::get( (int) $subscriber->id ), $reason, 'soft_limit' === $kind ? 'soft_limit' : 'hard' );
 
 		return true;
 	}
@@ -724,9 +730,13 @@ class Mailhouse_Subscribers {
 
 		$queue = Mailhouse_Install::table( 'queue' );
 
+		// What a campaign from the centre holds for them is kept, as not
+		// sent: the centre counted it and is owed an answer.
+		Mailhouse_Queue::withdraw_remote( (int) $subscriber_id );
+
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
-			$wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status = 'pending'", (int) $subscriber_id )
+			$wpdb->prepare( "DELETE FROM {$queue} WHERE subscriber_id = %d AND status = 'pending' AND remote_job_id IS NULL", (int) $subscriber_id )
 		);
 	}
 
@@ -1191,7 +1201,7 @@ class Mailhouse_Subscribers {
 			);
 		}
 
-		self::delete( array( (int) $subscriber->id ) );
+		self::delete( array( (int) $subscriber->id ), 'erasure' );
 
 		return array(
 			'items_removed'  => true,

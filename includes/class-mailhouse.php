@@ -56,6 +56,9 @@ class Mailhouse {
 			'automations' => new Mailhouse_Automations(),
 			'tracking'    => new Mailhouse_Tracking(),
 			'updater'     => new Mailhouse_Updater(),
+			// Optional link to a Mailhouse Central installation. Does nothing
+			// at all on a site that has not been connected to one.
+			'central'     => new Mailhouse_Central(),
 		);
 
 		if ( is_admin() ) {

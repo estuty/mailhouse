@@ -1,0 +1,824 @@
+<?php
+/**
+ * Who this site is to the centre.
+ *
+ * A connected site holds an Ed25519 key pair it made itself. The private
+ * half never leaves the site: it is kept through the settings framework's
+ * secret mechanism, so it is encrypted in the database, never printed into
+ * a form, and can be supplied instead as MAILHOUSE_CENTRAL_PRIVATE_KEY in
+ * wp-config.php. The centre holds the public half and nothing that could
+ * act as this site.
+ *
+ * Everything else the connector remembers -- where the centre is, this
+ * site's id there, the centre's own public key, when it last answered --
+ * is one option. A site that has never connected has no such option, and
+ * the connector does nothing at all.
+ *
+ * @package Mailhouse
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * The connection's stored state, registration, and the cloned-site guard.
+ */
+class Mailhouse_Central_Identity {
+
+	/**
+	 * Option holding the connection's state.
+	 */
+	const OPTION = 'mailhouse_central';
+
+	/**
+	 * Setting holding the private key.
+	 */
+	const KEY_SETTING = 'central_private_key';
+
+	/**
+	 * Setting holding a new private key while it is being registered (10.5).
+	 * Kept until the centre has taken it, so that a change interrupted half
+	 * way is finished with the same key, not a third one.
+	 */
+	const NEXT_KEY_SETTING = 'central_private_key_next';
+
+	/**
+	 * How old this site's key may grow before the site changes it by itself.
+	 */
+	const KEY_LIFETIME = YEAR_IN_SECONDS;
+
+	/**
+	 * Setting saying whether there is a connection at all.
+	 */
+	const FLAG_SETTING = 'central_connected';
+
+	/**
+	 * The states a connection can be in.
+	 *
+	 * ''          Never connected, or disconnected. The connector is inert.
+	 * connected   Registered and allowed to talk.
+	 * suspended   The centre is refusing this site (key revoked, website
+	 *             disconnected there, ...). Only heartbeats are sent.
+	 * clone       This site is not at the address it registered from: it is
+	 *             a copy. Nothing is sent, to anyone.
+	 * gone        The centre says the website was removed. Nothing is sent.
+	 */
+	const STATUSES = array( '', 'connected', 'suspended', 'clone', 'gone' );
+
+	/**
+	 * Loaded state, or null before the first read.
+	 *
+	 * @var array|null
+	 */
+	protected static $state = null;
+
+	/**
+	 * A state with nothing in it.
+	 *
+	 * @return array
+	 */
+	public static function defaults() {
+		return array(
+			'status'            => '',
+			'central_url'       => '',
+			'website_id'        => '',
+			'key_id'            => '',
+			'public_key'        => '',
+			'registered_url'    => '',
+			'platform_keys'     => array(),
+			'protocol'          => 0,
+			'registered_at'     => 0,
+			// Seconds to add to this server's clock to get the centre's.
+			'clock_offset'      => 0,
+			'last_tick_at'      => 0,
+			'last_heartbeat_at' => 0,
+			// What the centre said this site's standing is: connected or paused.
+			'centre_status'     => '',
+			// What the centre says it can be told, beyond what every centre
+			// can: names, as it gave them with its last answer to a report.
+			'centre_accepts'    => array(),
+			'suspended_reason'  => '',
+			'last_error'        => '',
+			'failures'          => 0,
+			'next_attempt_at'   => 0,
+			// The outbox. Which run of the sequence events belong to, what
+			// to add to a row's id to get its sequence number, and the id of
+			// the last row the centre has confirmed it holds.
+			'epoch'             => 1,
+			'seq_offset'        => 0,
+			'outbox_acked'      => 0,
+			'last_push_at'      => 0,
+			'push_failures'     => 0,
+			'push_next_at'      => 0,
+			'push_error'        => '',
+			// Why the two copies need comparing, when this site knows they do.
+			'needs_reconcile'   => '',
+			// Whether the centre has asked for a comparison.
+			'want_reconcile'    => false,
+			// The first copy of the list, and the comparison under way:
+			// where each has got to. Empty when there is none.
+			'backfill'          => array(),
+			'reconcile'         => array(),
+			'last_reconcile_at' => 0,
+			'last_reconcile'    => array(),
+			// Commands. The number of the last one dealt with, how many the
+			// centre said were waiting when this site last reported in, and
+			// what was wrong with the last one that could not be trusted.
+			'inbox_seq'         => 0,
+			'commands_pending'  => 0,
+			'command_error'     => '',
+			// This site's email template, as the centre holds it: the hash
+			// of the one it has, of what was sent beside it (the site's name,
+			// colours and sender), of one it would not take, when each thing
+			// happened, and what the centre said was wrong.
+			'template_hash'         => '',
+			'template_beside'       => '',
+			'template_refused'      => '',
+			'template_published_at' => 0,
+			'template_checked_at'   => 0,
+			'template_next_at'      => 0,
+			'template_error'        => '',
+			// Keys (10.5). When the centre made the set of platform keys this
+			// site last took, as it wrote it; when this site's own key was
+			// made; and what went wrong the last time it tried to change it.
+			'platform_keys_at'      => '',
+			'key_since'             => 0,
+			'key_error'             => '',
+		);
+	}
+
+	/**
+	 * The connection's state.
+	 *
+	 * @return array
+	 */
+	public static function state() {
+		if ( null === self::$state ) {
+			// A site that is not connected has no option to read, and is not
+			// made to look for one: the flag is in the settings every request
+			// has already loaded.
+			$stored = Mailhouse_Settings::get( self::FLAG_SETTING, false ) ? get_option( self::OPTION, array() ) : array();
+
+			self::$state = array_merge( self::defaults(), is_array( $stored ) ? $stored : array() );
+
+			if ( ! in_array( self::$state['status'], self::STATUSES, true ) ) {
+				self::$state['status'] = '';
+			}
+		}
+
+		return self::$state;
+	}
+
+	/**
+	 * One value from the state.
+	 *
+	 * @param string $key Key.
+	 * @return mixed
+	 */
+	public static function get( $key ) {
+		$state = self::state();
+
+		return isset( $state[ $key ] ) ? $state[ $key ] : null;
+	}
+
+	/**
+	 * Change the state.
+	 *
+	 * @param array $changes Key/value pairs.
+	 * @return void
+	 */
+	public static function update( array $changes ) {
+		global $wpdb;
+
+		$connected = (bool) Mailhouse_Settings::get( self::FLAG_SETTING, false );
+
+		if ( ! $connected ) {
+			// No connection is stored: this is one being made.
+			$state       = array_merge( self::state(), $changes );
+			self::$state = $state;
+
+			update_option( self::OPTION, $state, true );
+			Mailhouse_Settings::set( array( self::FLAG_SETTING => true ) );
+
+			return;
+		}
+
+		// Everything about the connection is one option, and this request
+		// has a copy of it from whenever it first looked. Written back
+		// whole, that copy would undo whatever another request had changed
+		// since: a scheduled run and an administrator's click, or two runs
+		// at once, would each put back the other's fields as they had been.
+		// One of those fields is where this site's numbering of its changes
+		// starts; put back, the centre is sent numbers it has already had
+		// for other changes, and takes the site for one restored from a
+		// backup. So: what is stored is read now, from the database, only
+		// what is being changed is changed, and nobody else does the same
+		// in between.
+		$name = Mailhouse_Central::lock_name() . '_state';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK( %s, 5 )', $name ) );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$raw    = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1", self::OPTION ) );
+		$stored = null === $raw ? null : maybe_unserialize( $raw );
+
+		if ( ! is_array( $stored ) && empty( $changes['website_id'] ) ) {
+			// The connection has been taken away by another request while
+			// this one was at work. Nothing is written: it is not put back.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', $name ) );
+			self::$state = array_merge( self::defaults(), array( 'status' => '' ) );
+
+			return;
+		}
+
+		$before = array_merge( self::defaults(), is_array( $stored ) ? $stored : array() );
+		$state  = array_merge( $before, $changes );
+
+		if ( $state !== $before ) {
+			// WordPress compares with what it remembers of the option, which
+			// is as old as this request. It is told what is stored now.
+			$all = wp_load_alloptions();
+
+			if ( is_array( $all ) && array_key_exists( self::OPTION, $all ) ) {
+				$all[ self::OPTION ] = $raw;
+				wp_cache_set( 'alloptions', $all, 'options' );
+			} elseif ( null !== $raw ) {
+				wp_cache_set( self::OPTION, $raw, 'options' );
+			}
+
+			update_option( self::OPTION, $state, true );
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK( %s )', $name ) );
+
+		if ( ! in_array( $state['status'], self::STATUSES, true ) ) {
+			$state['status'] = '';
+		}
+
+		self::$state = $state;
+	}
+
+	/**
+	 * Forget the in-memory copy.
+	 *
+	 * @return void
+	 */
+	public static function flush() {
+		self::$state = null;
+	}
+
+	/**
+	 * The connection's status. An empty string means there is none.
+	 *
+	 * @return string
+	 */
+	public static function status() {
+		return (string) self::get( 'status' );
+	}
+
+	/**
+	 * This site's private key, base64, or an empty string.
+	 *
+	 * @return string
+	 */
+	public static function private_key() {
+		return (string) Mailhouse_Settings::get( self::KEY_SETTING, '' );
+	}
+
+	/**
+	 * Whether plain http is acceptable, for the centre's address and this
+	 * site's own. Only ever for development, and only by a constant in
+	 * wp-config.php: the test rig runs everything on one machine without
+	 * certificates. Even then this site's own address must be a loopback
+	 * one, and the centre refuses anything else.
+	 *
+	 * @return bool
+	 */
+	public static function insecure_allowed() {
+		return defined( 'MAILHOUSE_CENTRAL_ALLOW_INSECURE' ) && MAILHOUSE_CENTRAL_ALLOW_INSECURE;
+	}
+
+	/**
+	 * This site's address in the one spelling the centre compares.
+	 *
+	 * @return array{0:?string,1:?string} Canonical address and problem; one is null.
+	 */
+	public static function site_url() {
+		return Mailhouse_Central_Protocol::canonical_site_url( home_url(), self::insecure_allowed() );
+	}
+
+	/**
+	 * Check and normalise the centre's address as an administrator typed it.
+	 *
+	 * @param string $input Address.
+	 * @return string|WP_Error The origin, without a trailing slash.
+	 */
+	public static function central_url( $input ) {
+		$text  = trim( (string) $input );
+		$parts = wp_parse_url( $text );
+
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return new WP_Error( 'mailhouse_central_url', __( 'Enter the centre’s full address, starting with https://', 'mailhouse' ) );
+		}
+
+		$scheme = strtolower( $parts['scheme'] );
+
+		if ( 'https' !== $scheme && ! ( 'http' === $scheme && self::insecure_allowed() ) ) {
+			return new WP_Error( 'mailhouse_central_url', __( 'The centre’s address must start with https://', 'mailhouse' ) );
+		}
+
+		if ( isset( $parts['user'] ) || isset( $parts['pass'] ) || isset( $parts['query'] ) || isset( $parts['fragment'] ) ) {
+			return new WP_Error( 'mailhouse_central_url', __( 'Enter the centre’s address only, with no user name and nothing after a ? or #.', 'mailhouse' ) );
+		}
+
+		if ( isset( $parts['path'] ) && '' !== trim( $parts['path'], '/' ) ) {
+			return new WP_Error( 'mailhouse_central_url', __( 'Enter the centre’s address only, without a path.', 'mailhouse' ) );
+		}
+
+		return $scheme . '://' . strtolower( $parts['host'] ) . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' );
+	}
+
+	/**
+	 * The storage engine of the plugin's tables: 'InnoDB' when they all
+	 * are, otherwise the first that is not.
+	 *
+	 * @return string
+	 */
+	public static function db_engine() {
+		global $wpdb;
+
+		$engine = 'InnoDB';
+
+		foreach ( array( 'subscribers', 'tags', 'subscriber_tags', 'queue', 'log', 'outbox' ) as $name ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$row = $wpdb->get_row( $wpdb->prepare( 'SHOW TABLE STATUS LIKE %s', $wpdb->esc_like( Mailhouse_Install::table( $name ) ) ) );
+
+			if ( $row && isset( $row->Engine ) && 'innodb' !== strtolower( (string) $row->Engine ) ) { // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase
+				return (string) $row->Engine; // phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase
+			}
+		}
+
+		return $engine;
+	}
+
+	/**
+	 * Register this site with the centre.
+	 *
+	 * Makes a key pair, proves to the centre that this site holds it, and
+	 * exchanges the single-use enrolment token for a registration. The
+	 * private key is stored only once the centre has accepted the public
+	 * one, so a refused attempt leaves nothing behind.
+	 *
+	 * @param string $central_input The centre's address, as typed.
+	 * @param string $token         The enrolment token, as pasted.
+	 * @return true|WP_Error
+	 */
+	public static function register( $central_input, $token ) {
+		if ( Mailhouse_Central::disabled() ) {
+			return new WP_Error( 'mailhouse_central_disabled', __( 'The connector is switched off in wp-config.php (MAILHOUSE_CENTRAL_DISABLED).', 'mailhouse' ) );
+		}
+
+		if ( '' !== self::status() ) {
+			return new WP_Error( 'mailhouse_central_connected', __( 'This site is already connected. Disconnect it first.', 'mailhouse' ) );
+		}
+
+		if ( ! Mailhouse_Central_Protocol::available() ) {
+			return new WP_Error( 'mailhouse_central_sodium', __( 'This server cannot make the signatures the connection needs (sodium is missing).', 'mailhouse' ) );
+		}
+
+		$central = self::central_url( $central_input );
+
+		if ( is_wp_error( $central ) ) {
+			return $central;
+		}
+
+		$token = trim( (string) $token );
+
+		if ( ! preg_match( '/^mhe_[A-Za-z0-9_-]{43}$/', $token ) ) {
+			return new WP_Error( 'mailhouse_central_token', __( 'That is not an enrolment token. Copy it again from the dashboard: it starts with mhe_.', 'mailhouse' ) );
+		}
+
+		list( $site_url, $problem ) = self::site_url();
+
+		if ( null === $site_url ) {
+			return new WP_Error( 'mailhouse_central_site_url', self::site_url_problem( $problem ) );
+		}
+
+		// A key supplied in wp-config.php is used as it is; otherwise a new
+		// one is made for every registration.
+		if ( Mailhouse_Settings::is_constant( self::KEY_SETTING ) ) {
+			$raw = Mailhouse_Central_Protocol::decode( self::private_key(), SODIUM_CRYPTO_SIGN_SECRETKEYBYTES );
+
+			if ( null === $raw ) {
+				return new WP_Error( 'mailhouse_central_key', __( 'MAILHOUSE_CENTRAL_PRIVATE_KEY in wp-config.php is not a valid key.', 'mailhouse' ) );
+			}
+
+			$key = Mailhouse_Central_Protocol::describe_key( $raw );
+		} else {
+			$key = Mailhouse_Central_Protocol::generate_keypair();
+		}
+
+		$body = array(
+			'enrolment_token'   => $token,
+			'site_url'          => $site_url,
+			'public_key'        => $key['public'],
+			'key_id'            => $key['key_id'],
+			'proof'             => Mailhouse_Central_Protocol::sign(
+				Mailhouse_Central_Protocol::registration_message( $token, $site_url, $key['public'], $key['key_id'] ),
+				$key['secret']
+			),
+			'plugin_version'    => MAILHOUSE_VERSION,
+			'protocol_versions' => array( Mailhouse_Central_Protocol::VERSION ),
+			'capabilities'      => Mailhouse_Central_Status::capabilities(),
+			'environment'       => array(
+				'wp'        => get_bloginfo( 'version' ),
+				'php'       => PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION,
+				'db_engine' => self::db_engine(),
+				'timezone'  => wp_timezone_string(),
+			),
+		);
+
+		$answer = Mailhouse_Central_Client::send( $central, 'POST', '/api/v1/connector/register', $body, null );
+
+		if ( is_wp_error( $answer ) ) {
+			return $answer;
+		}
+
+		if ( 201 !== $answer['status'] ) {
+			return new WP_Error( 'mailhouse_central_refused', self::registration_refusal( $answer ) );
+		}
+
+		$accepted = self::read_registration( $answer['body'] );
+
+		if ( is_wp_error( $accepted ) ) {
+			return $accepted;
+		}
+
+		if ( ! Mailhouse_Settings::is_constant( self::KEY_SETTING ) ) {
+			// A key half way to being registered belonged to the connection
+			// this one replaces.
+			Mailhouse_Settings::set(
+				array(
+					self::KEY_SETTING      => $key['secret'],
+					self::NEXT_KEY_SETTING => '',
+				)
+			);
+		}
+
+		self::$state = null;
+		self::update(
+			array_merge(
+				self::defaults(),
+				array(
+					'status'         => 'connected',
+					'central_url'    => $central,
+					'website_id'     => $accepted['website_id'],
+					'key_id'         => $key['key_id'],
+					'public_key'     => $key['public'],
+					'registered_url' => $site_url,
+					'platform_keys'  => $accepted['platform_keys'],
+					'protocol'       => $accepted['protocol'],
+					'registered_at'  => time(),
+					'key_since'      => time(),
+					'clock_offset'   => Mailhouse_Central_Client::offset_from( $answer['body'] ),
+				),
+				Mailhouse_Central_Sync::begin( $accepted['last_seq_received'], $accepted['epoch'] ),
+				// The centre knows nothing yet of the subscribers this
+				// site already has. Telling it starts on the next scheduled run.
+				array( 'backfill' => Mailhouse_Central_Reconcile::fresh_backfill() )
+			)
+		);
+
+		// Registered in the middle of a request: start listening now, not
+		// on the next one.
+		Mailhouse_Central_Outbox::listen();
+
+		return true;
+	}
+
+	/**
+	 * Check the centre's answer to a registration before trusting any of it.
+	 *
+	 * @param mixed $body Decoded response body.
+	 * @return array|WP_Error
+	 */
+	protected static function read_registration( $body ) {
+		$malformed = new WP_Error( 'mailhouse_central_answer', __( 'The centre accepted the registration but its answer could not be read. Disconnect the website in the dashboard and try again with a new token.', 'mailhouse' ) );
+
+		if ( ! is_array( $body ) || empty( $body['website_id'] ) || empty( $body['platform_keys'] ) || ! is_array( $body['platform_keys'] ) ) {
+			return $malformed;
+		}
+
+		if ( ! preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', (string) $body['website_id'] ) ) {
+			return $malformed;
+		}
+
+		if ( ! isset( $body['protocol'] ) || Mailhouse_Central_Protocol::VERSION !== (int) $body['protocol'] ) {
+			return $malformed;
+		}
+
+		$keys = array();
+
+		foreach ( $body['platform_keys'] as $key ) {
+			if ( ! is_array( $key ) || empty( $key['key_id'] ) || ! is_string( $key['key_id'] ) || ! isset( $key['public_key'] ) ) {
+				return $malformed;
+			}
+
+			if ( null === Mailhouse_Central_Protocol::decode( $key['public_key'], SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES ) ) {
+				return $malformed;
+			}
+
+			$keys[] = array(
+				'key_id'     => substr( $key['key_id'], 0, 64 ),
+				'public_key' => $key['public_key'],
+				'status'     => isset( $key['status'] ) && 'next' === $key['status'] ? 'next' : 'active',
+			);
+		}
+
+		// Where the centre's count of this website's events stands. Absent
+		// from a centre older than synchronisation, which has none.
+		$sync = isset( $body['sync'] ) && is_array( $body['sync'] ) ? $body['sync'] : array();
+
+		return array(
+			'website_id'        => (string) $body['website_id'],
+			'platform_keys'     => $keys,
+			'protocol'          => (int) $body['protocol'],
+			'epoch'             => isset( $sync['epoch'] ) ? max( 1, (int) $sync['epoch'] ) : 1,
+			'last_seq_received' => isset( $sync['last_seq_received'] ) ? max( 0, (int) $sync['last_seq_received'] ) : 0,
+		);
+	}
+
+	/**
+	 * Take the set of platform keys the centre announced in its answer to a
+	 * report, if it is signed by a key this site trusts and is newer than
+	 * the last set taken (10.5).
+	 *
+	 * This is the one way, short of registering again, that what this site
+	 * trusts changes: a new key is introduced by one already trusted, and a
+	 * key the centre has stopped announcing is no longer trusted. An older
+	 * set, replayed, changes nothing.
+	 *
+	 * @param mixed $announcement The set, as decoded from JSON.
+	 * @return bool Whether it was taken.
+	 */
+	public static function adopt_platform_keys( $announcement ) {
+		$state = self::state();
+		$keys  = Mailhouse_Central_Protocol::read_key_set( $announcement, (array) $state['platform_keys'] );
+
+		if ( null === $keys ) {
+			return false;
+		}
+
+		// Written as the centre writes every such moment, to the millisecond,
+		// so that the later of two is the greater as text.
+		$at = (string) $announcement['issued_at'];
+
+		if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/', $at ) || strcmp( $at, (string) $state['platform_keys_at'] ) <= 0 ) {
+			return false;
+		}
+
+		self::update(
+			array(
+				'platform_keys'    => $keys,
+				'platform_keys_at' => $at,
+			)
+		);
+
+		return true;
+	}
+
+	/**
+	 * Whether this site's key is old enough to change by itself.
+	 *
+	 * @return bool
+	 */
+	public static function key_due() {
+		$state = self::state();
+		$since = (int) $state['key_since'] ? (int) $state['key_since'] : (int) $state['registered_at'];
+
+		return 'connected' === $state['status'] && $since > 0 && time() - $since >= self::KEY_LIFETIME
+			&& ! Mailhouse_Settings::is_constant( self::KEY_SETTING );
+	}
+
+	/**
+	 * Change this site's key (10.5): make a new pair and have the centre
+	 * register it, in a request signed with the key in use and carrying a
+	 * proof made with the new one. Only once the centre has said yes does
+	 * this site sign with the new key; the old one is accepted for a day
+	 * more, so nothing in between is refused.
+	 *
+	 * The new key is kept until the centre has taken it. A change that was
+	 * interrupted, or whose answer was lost, is finished with the same key:
+	 * the centre answers the same request the same way.
+	 *
+	 * @return array|WP_Error array( key_id, old_key_valid_until ) on success.
+	 */
+	public static function rotate_key() {
+		if ( Mailhouse_Settings::is_constant( self::KEY_SETTING ) ) {
+			return new WP_Error( 'mailhouse_central_key_fixed', __( 'This site’s key is set in wp-config.php (MAILHOUSE_CENTRAL_PRIVATE_KEY). Change it there, and connect the site again.', 'mailhouse' ) );
+		}
+
+		$state = self::state();
+
+		if ( 'connected' !== $state['status'] ) {
+			return new WP_Error( 'mailhouse_central_not_connected', __( 'This site is not connected, so it has no key to change.', 'mailhouse' ) );
+		}
+
+		$pending = Mailhouse_Central_Protocol::decode( (string) Mailhouse_Settings::get( self::NEXT_KEY_SETTING, '' ), SODIUM_CRYPTO_SIGN_SECRETKEYBYTES );
+
+		if ( null === $pending ) {
+			$key = Mailhouse_Central_Protocol::generate_keypair();
+			Mailhouse_Settings::set( array( self::NEXT_KEY_SETTING => $key['secret'] ) );
+		} else {
+			$key = Mailhouse_Central_Protocol::describe_key( $pending );
+		}
+
+		$answer = Mailhouse_Central_Client::signed(
+			'POST',
+			'/api/v1/connector/keys/rotate',
+			array(
+				'new_key_id'     => $key['key_id'],
+				'new_public_key' => $key['public'],
+				'proof'          => Mailhouse_Central_Protocol::sign(
+					Mailhouse_Central_Protocol::rotation_message( $state['website_id'], $state['key_id'], $key['key_id'], $key['public'] ),
+					$key['secret']
+				),
+			)
+		);
+
+		if ( is_wp_error( $answer ) ) {
+			self::update( array( 'key_error' => substr( $answer->get_error_message(), 0, 500 ) ) );
+
+			return $answer;
+		}
+
+		$body = is_array( $answer['body'] ) ? $answer['body'] : array();
+
+		if ( 200 !== $answer['status'] || ! isset( $body['key_id'] ) || $key['key_id'] !== $body['key_id'] ) {
+			if ( 409 === $answer['status'] ) {
+				// The centre will not take this key. A fresh one is made for
+				// the next attempt.
+				Mailhouse_Settings::set( array( self::NEXT_KEY_SETTING => '' ) );
+			}
+
+			/* translators: %d: HTTP status. */
+			$message = sprintf( __( 'The centre did not take this site’s new key (status %d).', 'mailhouse' ), (int) $answer['status'] );
+			self::update( array( 'key_error' => $message ) );
+
+			return new WP_Error( 'mailhouse_central_key_refused', $message );
+		}
+
+		Mailhouse_Settings::set(
+			array(
+				self::KEY_SETTING      => $key['secret'],
+				self::NEXT_KEY_SETTING => '',
+			)
+		);
+		self::update(
+			array(
+				'key_id'     => $key['key_id'],
+				'public_key' => $key['public'],
+				'key_since'  => time(),
+				'key_error'  => '',
+			)
+		);
+
+		return array(
+			'key_id'              => $key['key_id'],
+			'old_key_valid_until' => isset( $body['old_key_valid_until'] ) && is_string( $body['old_key_valid_until'] ) ? substr( $body['old_key_valid_until'], 0, 40 ) : '',
+		);
+	}
+
+	/**
+	 * Why the centre refused a registration, in words an administrator can act on.
+	 *
+	 * @param array $answer Response: status and body.
+	 * @return string
+	 */
+	protected static function registration_refusal( $answer ) {
+		$code = is_array( $answer['body'] ) && isset( $answer['body']['code'] ) ? (string) $answer['body']['code'] : '';
+
+		switch ( $code ) {
+			case 'gone':
+				return __( 'That enrolment token is unknown, already used or more than an hour old. Make a new one in the dashboard.', 'mailhouse' );
+			case 'site_url_mismatch':
+				/* translators: %s: this site's address. */
+				return sprintf( __( 'The address entered for this website in the dashboard is not this site’s address, which is %s. Correct it there (by adding the website again) and use the new token.', 'mailhouse' ), home_url() );
+			case 'storage_engine_unsupported':
+				return __( 'The centre requires this plugin’s database tables to use InnoDB.', 'mailhouse' );
+			case 'protocol_unsupported':
+				return __( 'This version of the plugin and the centre do not speak a common protocol version. Update whichever is older.', 'mailhouse' );
+			case 'rate_limited':
+				return __( 'Too many registration attempts from this server. Wait an hour and try again.', 'mailhouse' );
+			case 'unauthenticated':
+				return __( 'The centre could not verify this site’s proof of its new key. Try again; if it keeps happening, report it.', 'mailhouse' );
+		}
+
+		/* translators: %d: HTTP status. */
+		return sprintf( __( 'The centre refused the registration (status %d).', 'mailhouse' ), (int) $answer['status'] );
+	}
+
+	/**
+	 * Why this site's own address cannot be registered.
+	 *
+	 * @param string|null $problem Problem code.
+	 * @return string
+	 */
+	public static function site_url_problem( $problem ) {
+		if ( 'scheme' === $problem ) {
+			/* translators: %s: this site's address. */
+			return sprintf( __( 'This site’s address (%s) is not https. Only an https site can be connected.', 'mailhouse' ), home_url() );
+		}
+
+		/* translators: %s: this site's address. */
+		return sprintf( __( 'This site’s address (%s) is not one the centre can register.', 'mailhouse' ), home_url() );
+	}
+
+	/**
+	 * Whether this site is still at the address it registered from.
+	 *
+	 * A copy of a connected site -- a staging clone, a restored backup at
+	 * another address -- carries the original's key and would otherwise
+	 * report as it and act on its commands. A copy finds here that it is
+	 * one, and stops before sending anything. If the address comes back
+	 * (the copy was the original all along, moved and moved back), so does
+	 * the connection.
+	 *
+	 * @return bool True when the addresses match.
+	 */
+	public static function at_registered_address() {
+		$state = self::state();
+
+		if ( '' === $state['status'] || '' === $state['registered_url'] ) {
+			return true;
+		}
+
+		list( $current ) = self::site_url();
+		$matches         = null !== $current && hash_equals( $state['registered_url'], $current );
+
+		if ( ! $matches && 'clone' !== $state['status'] ) {
+			self::update( array( 'status' => 'clone' ) );
+		} elseif ( $matches && 'clone' === $state['status'] ) {
+			self::update(
+				array(
+					'status'          => 'connected',
+					'failures'        => 0,
+					'next_attempt_at' => 0,
+				)
+			);
+		}
+
+		return $matches;
+	}
+
+	/**
+	 * Disconnect this site.
+	 *
+	 * Tells the centre, when that is both possible and right, and then
+	 * forgets the key and everything else about the connection. The local
+	 * part always happens: a site can always be disconnected from its own
+	 * settings, whether or not the centre can be reached.
+	 *
+	 * A copy of a site never tells the centre: it holds the original's key,
+	 * and the request would disconnect the original.
+	 *
+	 * @return bool Whether the centre was told and agreed.
+	 */
+	public static function disconnect() {
+		$state = self::state();
+		$told  = false;
+
+		if ( 'connected' === $state['status'] && ! Mailhouse_Central::disabled() && self::at_registered_address() ) {
+			$answer = Mailhouse_Central_Client::signed( 'POST', '/api/v1/connector/disconnect', null, 10 );
+			$told   = ! is_wp_error( $answer ) && 200 === $answer['status'];
+		}
+
+		Mailhouse_Settings::set(
+			Mailhouse_Settings::is_constant( self::KEY_SETTING )
+				? array(
+					self::FLAG_SETTING     => false,
+					self::NEXT_KEY_SETTING => '',
+				)
+				: array(
+					self::FLAG_SETTING     => false,
+					self::KEY_SETTING      => '',
+					self::NEXT_KEY_SETTING => '',
+				)
+		);
+
+		// A campaign the centre handed over is not sent by a site that is
+		// no longer the centre's.
+		Mailhouse_Central_Campaigns::disconnected();
+
+		delete_option( self::OPTION );
+		self::$state = null;
+
+		// What was waiting to be sent belonged to this connection. The
+		// newest row stays, so that the table never counts from one again.
+		Mailhouse_Central_Outbox::forget( Mailhouse_Central_Outbox::highest() );
+		Mailhouse_Central_Outbox::reset();
+
+		return $told;
+	}
+}

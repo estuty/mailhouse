@@ -235,6 +235,16 @@ class Mailhouse_Webhooks {
 		$events  = self::events( $provider, $payload );
 		$applied = 0;
 
+		/**
+		 * Fires when a provider has called with something this site could
+		 * read: its secret matched, its signature (where one is set) was
+		 * good, and its body was JSON. Before any of its events is acted on.
+		 *
+		 * @param string $provider Provider id.
+		 * @param array  $events   Normalised events, possibly none.
+		 */
+		do_action( 'mailhouse_webhook_received', $provider, $events );
+
 		foreach ( $events as $event ) {
 			if ( self::apply( $event ) ) {
 				$applied++;
@@ -621,7 +631,16 @@ class Mailhouse_Webhooks {
 					$type = 'delivered';
 				}
 
-				if ( $type && ! empty( $payload['Email'] ) ) {
+				// A bounce and a complaint name their reader `Email`. A
+				// delivery names them `Recipient`, and was never read: no
+				// delivery through Postmark was ever heard of.
+				$reader = ! empty( $payload['Email'] ) ? $payload['Email'] : '';
+
+				if ( '' === $reader && 'Delivery' === $record && ! empty( $payload['Recipient'] ) ) {
+					$reader = $payload['Recipient'];
+				}
+
+				if ( $type && $reader ) {
 					$when = '';
 
 					foreach ( array( 'BouncedAt', 'DeliveredAt', 'ChangedAt' ) as $field ) {
@@ -632,7 +651,7 @@ class Mailhouse_Webhooks {
 					}
 
 					$events[] = self::event(
-						$payload['Email'],
+						$reader,
 						$type,
 						$reason,
 						isset( $payload['MessageID'] ) ? $payload['MessageID'] : '',
@@ -651,7 +670,11 @@ class Mailhouse_Webhooks {
 				if ( 'email.bounced' === $event ) {
 					$bounce = isset( $data['bounce'] ) && is_array( $data['bounce'] ) ? $data['bounce'] : array();
 					$kind   = isset( $bounce['type'] ) ? strtolower( (string) $bounce['type'] ) : '';
-					$type   = 'transient' === $kind ? 'soft' : 'hard';
+					// A bounce that may pass is `Temporary` in Resend's own
+					// words and `Transient` in those of the service under
+					// it. Only the second was known, so the first retired
+					// an address that was merely full.
+					$type   = in_array( $kind, array( 'transient', 'temporary' ), true ) ? 'soft' : 'hard';
 					$reason = isset( $bounce['message'] ) ? (string) $bounce['message'] : '';
 				} elseif ( 'email.complained' === $event ) {
 					$type = 'complaint';
@@ -801,7 +824,7 @@ class Mailhouse_Webhooks {
 				// is not. The count is cleared again the next time the
 				// provider confirms a delivery.
 				if ( $limit > 0 && $bounces >= $limit ) {
-					Mailhouse_Subscribers::mark_bounced( Mailhouse_Subscribers::get( $id ), $event['reason'] );
+					Mailhouse_Subscribers::mark_bounced( Mailhouse_Subscribers::get( $id ), $event['reason'], 'soft_limit' );
 				}
 				break;
 

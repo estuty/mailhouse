@@ -95,7 +95,7 @@ class Mailhouse_Tools {
 							<td>
 								<select name="status" id="mailhouse-import-status">
 									<option value="subscribed"><?php esc_html_e( 'Subscribed', 'mailhouse' ); ?></option>
-									<option value="pending"><?php esc_html_e( 'Pending, and send them a confirmation email', 'mailhouse' ); ?></option>
+									<option value="pending"><?php esc_html_e( 'Pending: asked to confirm later, from the Subscribers screen', 'mailhouse' ); ?></option>
 								</select>
 								<p class="description"><?php esc_html_e( 'Only import addresses that asked to hear from you. Buying or scraping a list is how a sending domain gets blocked.', 'mailhouse' ); ?></p>
 							</td>
@@ -373,16 +373,9 @@ class Mailhouse_Tools {
 		$imported = 0;
 
 		foreach ( $rows as $row ) {
-			// In Noptin, `active` is inverted: 0 means the subscriber is on
-			// the list, 1 means they are not.
-			$inactive  = $has( 'active' ) && (int) $row->active === 1;
-			$confirmed = $has( 'confirmed' ) ? (bool) $row->confirmed : true;
-
-			if ( $inactive ) {
-				$status = 'unsubscribed';
-			} else {
-				$status = $confirmed ? 'subscribed' : 'pending';
-			}
+			$status = $has( 'status' )
+				? self::noptin_status( (string) $row->status )
+				: self::noptin_legacy_status( $row, $has );
 
 			$result = Mailhouse_Subscribers::add(
 				array(
@@ -407,6 +400,51 @@ class Mailhouse_Tools {
 		}
 
 		return $imported;
+	}
+
+	/**
+	 * A Mailhouse status for a Noptin 2.0+ row, from its `status` column.
+	 *
+	 * Noptin has more ways of being off the list than Mailhouse does. All of
+	 * them, and anything Noptin may add later, come across as unsubscribed:
+	 * an import must never put back on the list someone who left it, was
+	 * blocked or complained. `confirmed` is not consulted: a site without
+	 * double opt-in has subscribers who never confirmed, and Noptin's own
+	 * pending status is what says someone still has to.
+	 *
+	 * @param string $status Noptin's status.
+	 * @return string
+	 */
+	protected static function noptin_status( $status ) {
+		$map = array(
+			'subscribed' => 'subscribed',
+			'pending'    => 'pending',
+			'bounced'    => 'bounced',
+		);
+
+		$status = strtolower( trim( $status ) );
+
+		return isset( $map[ $status ] ) ? $map[ $status ] : 'unsubscribed';
+	}
+
+	/**
+	 * A Mailhouse status for a row from before Noptin 2.0, which had no
+	 * `status` column, only `active` and `confirmed`.
+	 *
+	 * @param object   $row The row.
+	 * @param callable $has Whether the table has a column.
+	 * @return string
+	 */
+	protected static function noptin_legacy_status( $row, $has ) {
+		// `active` is inverted: 0 means the subscriber is on the list, 1
+		// means they are not.
+		if ( $has( 'active' ) && 1 === (int) $row->active ) {
+			return 'unsubscribed';
+		}
+
+		$confirmed = $has( 'confirmed' ) ? (bool) $row->confirmed : true;
+
+		return $confirmed ? 'subscribed' : 'pending';
 	}
 
 	/**
